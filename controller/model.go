@@ -276,6 +276,27 @@ func RetrieveModel(c *gin.Context, modelType int) {
 			c.JSON(200, aiModel)
 		}
 	} else {
+		if len(model.GetModelEnableGroups(modelId)) > 0 {
+			oaiModel := dto.OpenAIModels{
+				Id:                     modelId,
+				Object:                 "model",
+				Created:                1626777600,
+				OwnedBy:                "custom",
+				SupportedEndpointTypes: model.GetModelSupportEndpointTypes(modelId),
+			}
+			switch modelType {
+			case constant.ChannelTypeAnthropic:
+				c.JSON(200, dto.AnthropicModel{
+					ID:          oaiModel.Id,
+					CreatedAt:   time.Unix(int64(oaiModel.Created), 0).UTC().Format(time.RFC3339),
+					DisplayName: oaiModel.Id,
+					Type:        "model",
+				})
+			default:
+				c.JSON(200, oaiModel)
+			}
+			return
+		}
 		openAIError := types.OpenAIError{
 			Message: fmt.Sprintf("The model '%s' does not exist", modelId),
 			Type:    "invalid_request_error",

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -124,6 +125,7 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 func (a *Adaptor) getRequestUrl(info *relaycommon.RelayInfo, modelName, suffix string) (string, error) {
+	modelName = url.PathEscape(modelName)
 	region := GetModelRegion(info.ApiVersion, info.OriginModelName)
 	if info.ChannelOtherSettings.VertexKeyType != dto.VertexKeyTypeAPIKey {
 		adc := &Credentials{}

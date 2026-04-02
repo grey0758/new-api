@@ -399,6 +399,9 @@ func GetModelRatio(name string) (float64, bool, string) {
 
 	ratio, ok := modelRatioMap.Get(name)
 	if !ok {
+		if strings.HasPrefix(name, "nano-banana-") {
+			return 4, true, name
+		}
 		if strings.HasSuffix(name, CompactModelSuffix) {
 			if wildcardRatio, ok := modelRatioMap.Get(CompactWildcardModelKey); ok {
 				return wildcardRatio, true, name

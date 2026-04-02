@@ -14,6 +14,7 @@ var (
 		"dall-e-2",
 		"gpt-image-1",
 		"prefix:imagen-",
+		"prefix:nano-banana-",
 		"flux-",
 		"flux.1-",
 	}

@@ -124,6 +124,139 @@ func indexComma(s string) int {
 	return -1
 }
 
+const (
+	gemini31FlashImagePrice1K = 0.067
+	gemini31FlashImagePrice2K = 0.101
+	gemini31FlashImagePrice4K = 0.151
+	gemini31FlashImagePrice05 = 0.045
+
+	gemini3ProImagePrice1K = 0.134
+	gemini3ProImagePrice4K = 0.24
+)
+
+func normalizeGeminiImageSize(size string) string {
+	size = strings.ToUpper(strings.TrimSpace(size))
+	switch size {
+	case "0.5K", "512", "512X512":
+		return "0.5K"
+	case "1K", "1024", "1024X1024", "":
+		return "1K"
+	case "2K", "2048", "2048X2048":
+		return "2K"
+	case "4K", "4096", "4096X4096":
+		return "4K"
+	default:
+		return size
+	}
+}
+
+func (i *ImageRequest) getExtraBodyGeminiImageSize() string {
+	raw, ok := i.Extra["extra_body"]
+	if !ok || len(raw) == 0 {
+		return ""
+	}
+
+	var extraBody map[string]any
+	if err := common.Unmarshal(raw, &extraBody); err != nil {
+		return ""
+	}
+	googleBody, ok := extraBody["google"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	imageConfig, ok := googleBody["image_config"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	imageSize, ok := imageConfig["image_size"].(string)
+	if !ok {
+		return ""
+	}
+	return normalizeGeminiImageSize(imageSize)
+}
+
+func inferGeminiImageSizeFromAlias(modelName string) string {
+	modelName = strings.ToLower(strings.TrimSpace(modelName))
+	switch {
+	case strings.Contains(modelName, "-small-"):
+		return "0.5K"
+	case strings.Contains(modelName, "-pro-large-"):
+		return "4K"
+	case strings.Contains(modelName, "-2-2k-"), strings.Contains(modelName, "-pro-2k-"):
+		return "2K"
+	}
+	return ""
+}
+
+func inferGeminiImageSizeFromQuality(quality string) string {
+	switch strings.ToLower(strings.TrimSpace(quality)) {
+	case "0.5k", "512", "512x512":
+		return "0.5K"
+	case "4k", "4096", "4096x4096":
+		return "4K"
+	case "hd", "high", "2k":
+		return "2K"
+	case "standard", "medium", "low", "auto", "1k", "":
+		return "1K"
+	default:
+		return ""
+	}
+}
+
+func resolveGeminiImageSize(i *ImageRequest) string {
+	if size := i.getExtraBodyGeminiImageSize(); size != "" {
+		return size
+	}
+	if size := inferGeminiImageSizeFromAlias(i.Model); size != "" {
+		return size
+	}
+	if size := inferGeminiImageSizeFromQuality(i.Quality); size != "" {
+		return size
+	}
+	return "1K"
+}
+
+func isGemini31FlashImageFamily(modelName string) bool {
+	modelName = strings.ToLower(modelName)
+	if strings.HasPrefix(modelName, "gemini-3.1-flash-image-preview") {
+		return true
+	}
+	return strings.Contains(modelName, "nano-banana-") && !strings.Contains(modelName, "-pro")
+}
+
+func isGemini3ProImageFamily(modelName string) bool {
+	modelName = strings.ToLower(modelName)
+	if strings.HasPrefix(modelName, "gemini-3-pro-image-preview") {
+		return true
+	}
+	return strings.Contains(modelName, "nano-banana-") && strings.Contains(modelName, "-pro")
+}
+
+func resolveGeminiImagePriceRatio(modelName string, imageSize string) float64 {
+	imageSize = normalizeGeminiImageSize(imageSize)
+
+	switch {
+	case isGemini31FlashImageFamily(modelName):
+		switch imageSize {
+		case "0.5K":
+			return gemini31FlashImagePrice05 / gemini31FlashImagePrice1K
+		case "2K":
+			return gemini31FlashImagePrice2K / gemini31FlashImagePrice1K
+		case "4K":
+			return gemini31FlashImagePrice4K / gemini31FlashImagePrice1K
+		default:
+			return 1
+		}
+	case isGemini3ProImageFamily(modelName):
+		if imageSize == "4K" {
+			return gemini3ProImagePrice4K / gemini3ProImagePrice1K
+		}
+		return 1
+	default:
+		return 1
+	}
+}
+
 func (i *ImageRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	var sizeRatio = 1.0
 	var qualityRatio = 1.0
@@ -146,6 +279,11 @@ func (i *ImageRequest) GetTokenCountMeta() *types.TokenCountMeta {
 				qualityRatio = 1.5
 			}
 		}
+	}
+
+	if strings.HasPrefix(i.Model, "gemini-") || strings.Contains(i.Model, "nano-banana-") {
+		sizeRatio = resolveGeminiImagePriceRatio(i.Model, resolveGeminiImageSize(i))
+		qualityRatio = 1
 	}
 
 	// not support token count for dalle

@@ -1,6 +1,8 @@
 package model_setting
 
 import (
+	"strings"
+
 	"github.com/QuantumNous/new-api/setting/config"
 )
 
@@ -67,6 +69,9 @@ func GetGeminiVersionSetting(key string) string {
 }
 
 func IsGeminiModelSupportImagine(model string) bool {
+	if strings.HasPrefix(model, "nano-banana-") {
+		return true
+	}
 	for _, v := range geminiSettings.SupportedImagineModels {
 		if v == model {
 			return true
