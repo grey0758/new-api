@@ -281,6 +281,22 @@ func GetUser(c *gin.Context) {
 	return
 }
 
+func buildAdminUserSummary(user *model.User) gin.H {
+	if user == nil {
+		return gin.H{}
+	}
+	return gin.H{
+		"id":           user.Id,
+		"username":     user.Username,
+		"display_name": user.DisplayName,
+		"role":         user.Role,
+		"status":       user.Status,
+		"group":        user.Group,
+		"quota":        user.Quota,
+		"email":        user.Email,
+	}
+}
+
 func GenerateAccessToken(c *gin.Context) {
 	id := c.GetInt("id")
 	user, err := model.GetUserById(id, true)
@@ -314,6 +330,54 @@ func GenerateAccessToken(c *gin.Context) {
 		"data":    user.AccessToken,
 	})
 	return
+}
+
+type AdminIncreaseUserQuotaRequest struct {
+	Quota  int    `json:"quota"`
+	Reason string `json:"reason"`
+}
+
+func AdminIncreaseUserQuota(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	var req AdminIncreaseUserQuotaRequest
+	if err := common.DecodeJson(c.Request.Body, &req); err != nil || req.Quota <= 0 {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+
+	user, err := model.GetUserById(id, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	myRole := c.GetInt("role")
+	if myRole <= user.Role && myRole != common.RoleRootUser {
+		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
+		return
+	}
+
+	if err := model.IncreaseUserQuota(user.Id, req.Quota, true); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	logContent := fmt.Sprintf("管理员增加用户额度 %s", logger.LogQuota(req.Quota))
+	if reason := strings.TrimSpace(req.Reason); reason != "" {
+		logContent = fmt.Sprintf("%s，原因：%s", logContent, reason)
+	}
+	model.RecordLog(user.Id, model.LogTypeManage, logContent)
+
+	user.Quota += req.Quota
+	common.ApiSuccess(c, gin.H{
+		"quota_added": req.Quota,
+		"user":        buildAdminUserSummary(user),
+	})
 }
 
 type TransferAffQuotaRequest struct {

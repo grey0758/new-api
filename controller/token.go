@@ -233,6 +233,182 @@ func AddToken(c *gin.Context) {
 	})
 }
 
+type AdminResolveTokenRequest struct {
+	Key string `json:"key"`
+}
+
+type AdminCreateTokenForUserRequest struct {
+	Name               string  `json:"name"`
+	ExpiredTime        int64   `json:"expired_time"`
+	RemainQuota        int     `json:"remain_quota"`
+	UnlimitedQuota     bool    `json:"unlimited_quota"`
+	ModelLimitsEnabled bool    `json:"model_limits_enabled"`
+	ModelLimits        string  `json:"model_limits"`
+	AllowIps           *string `json:"allow_ips"`
+	Group              string  `json:"group"`
+	CrossGroupRetry    bool    `json:"cross_group_retry"`
+}
+
+func AdminResolveToken(c *gin.Context) {
+	var req AdminResolveTokenRequest
+	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+
+	tokenKey := strings.TrimPrefix(strings.TrimSpace(req.Key), "sk-")
+	if tokenKey == "" {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+
+	token, err := model.GetTokenByKey(tokenKey, false)
+	if err != nil {
+		common.SysError("failed to resolve token by key: " + err.Error())
+		common.ApiErrorI18n(c, i18n.MsgTokenGetInfoFailed)
+		return
+	}
+
+	user, err := model.GetUserById(token.UserId, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	myRole := c.GetInt("role")
+	if myRole <= user.Role && myRole != common.RoleRootUser {
+		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionSameLevel)
+		return
+	}
+
+	common.ApiSuccess(c, gin.H{
+		"user": buildAdminUserSummary(user),
+		"token": gin.H{
+			"id":                   token.Id,
+			"user_id":              token.UserId,
+			"name":                 token.Name,
+			"masked_key":           "sk-" + token.GetMaskedKey(),
+			"status":               token.Status,
+			"group":                token.Group,
+			"created_time":         token.CreatedTime,
+			"expired_time":         token.ExpiredTime,
+			"remain_quota":         token.RemainQuota,
+			"used_quota":           token.UsedQuota,
+			"unlimited_quota":      token.UnlimitedQuota,
+			"cross_group_retry":    token.CrossGroupRetry,
+			"model_limits":         token.ModelLimits,
+			"model_limits_enabled": token.ModelLimitsEnabled,
+		},
+	})
+}
+
+func AdminCreateTokenForUser(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	var req AdminCreateTokenForUserRequest
+	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+
+	user, err := model.GetUserById(id, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	myRole := c.GetInt("role")
+	if myRole <= user.Role && myRole != common.RoleRootUser {
+		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
+		return
+	}
+
+	tokenName := strings.TrimSpace(req.Name)
+	if tokenName == "" {
+		tokenName = fmt.Sprintf("payment-%s", common.GetTimeString())
+	}
+	if len(tokenName) > 50 {
+		common.ApiErrorI18n(c, i18n.MsgTokenNameTooLong)
+		return
+	}
+	if !req.UnlimitedQuota {
+		if req.RemainQuota < 0 {
+			common.ApiErrorI18n(c, i18n.MsgTokenQuotaNegative)
+			return
+		}
+		maxQuotaValue := int((1000000000 * common.QuotaPerUnit))
+		if req.RemainQuota > maxQuotaValue {
+			common.ApiErrorI18n(c, i18n.MsgTokenQuotaExceedMax, map[string]any{"Max": maxQuotaValue})
+			return
+		}
+	}
+
+	maxTokens := operation_setting.GetMaxUserTokens()
+	count, err := model.CountUserTokens(user.Id)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if int(count) >= maxTokens {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": fmt.Sprintf("已达到最大令牌数量限制 (%d)", maxTokens),
+		})
+		return
+	}
+
+	key, err := common.GenerateKey()
+	if err != nil {
+		common.ApiErrorI18n(c, i18n.MsgTokenGenerateFailed)
+		common.SysLog("failed to generate admin token key: " + err.Error())
+		return
+	}
+
+	token := model.Token{
+		UserId:             user.Id,
+		Name:               tokenName,
+		Key:                key,
+		CreatedTime:        common.GetTimestamp(),
+		AccessedTime:       common.GetTimestamp(),
+		ExpiredTime:        req.ExpiredTime,
+		RemainQuota:        req.RemainQuota,
+		UnlimitedQuota:     req.UnlimitedQuota,
+		ModelLimitsEnabled: req.ModelLimitsEnabled,
+		ModelLimits:        req.ModelLimits,
+		AllowIps:           req.AllowIps,
+		Group:              req.Group,
+		CrossGroupRetry:    req.CrossGroupRetry,
+	}
+	if err := token.Insert(); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	model.RecordLog(user.Id, model.LogTypeManage, fmt.Sprintf("管理员创建令牌 %s (ID: %d)", token.Name, token.Id))
+
+	common.ApiSuccess(c, gin.H{
+		"user": buildAdminUserSummary(user),
+		"token": gin.H{
+			"id":              token.Id,
+			"user_id":         token.UserId,
+			"name":            token.Name,
+			"key":             token.GetFullKey(),
+			"display_key":     "sk-" + token.GetFullKey(),
+			"masked_key":      "sk-" + token.GetMaskedKey(),
+			"status":          token.Status,
+			"group":           token.Group,
+			"created_time":    token.CreatedTime,
+			"expired_time":    token.ExpiredTime,
+			"remain_quota":    token.RemainQuota,
+			"unlimited_quota": token.UnlimitedQuota,
+		},
+	})
+}
+
 func DeleteToken(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	userId := c.GetInt("id")
