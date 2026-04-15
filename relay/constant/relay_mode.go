@@ -86,12 +86,19 @@ func Path2RelayMode(path string) int {
 		relayMode = RelayModeRerank
 	} else if strings.HasPrefix(path, "/v1/realtime") {
 		relayMode = RelayModeRealtime
-	} else if strings.HasPrefix(path, "/v1beta/models") || strings.HasPrefix(path, "/v1/models") {
+	} else if IsGeminiPath(path) {
 		relayMode = RelayModeGemini
 	} else if strings.HasPrefix(path, "/mj") {
 		relayMode = Path2RelayModeMidjourney(path)
 	}
 	return relayMode
+}
+
+func IsGeminiPath(path string) bool {
+	return strings.HasPrefix(path, "/v1beta/models") ||
+		strings.HasPrefix(path, "/v1/v1beta/models") ||
+		strings.HasPrefix(path, "/v1beta/openai/models") ||
+		strings.HasPrefix(path, "/v1/models")
 }
 
 func Path2RelayModeMidjourney(path string) int {

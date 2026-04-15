@@ -23,6 +23,8 @@ const (
 	SubscriptionDurationCustom = "custom"
 )
 
+const SubscriptionMonthlyCardPriceAmount = 999.0
+
 // Subscription quota reset period
 const (
 	SubscriptionResetNever   = "never"
@@ -177,6 +179,25 @@ type SubscriptionPlan struct {
 
 	CreatedAt int64 `json:"created_at" gorm:"bigint"`
 	UpdatedAt int64 `json:"updated_at" gorm:"bigint"`
+}
+
+func (p *SubscriptionPlan) IsMonthlyCard() bool {
+	return p != nil && p.DurationUnit == SubscriptionDurationMonth && p.DurationValue == 1
+}
+
+func (p *SubscriptionPlan) ApplyPricingPolicy() {
+	if p == nil {
+		return
+	}
+	if p.IsMonthlyCard() {
+		p.PriceAmount = SubscriptionMonthlyCardPriceAmount
+	}
+}
+
+func NormalizeSubscriptionPlans(plans []SubscriptionPlan) {
+	for i := range plans {
+		plans[i].ApplyPricingPolicy()
+	}
 }
 
 func (p *SubscriptionPlan) BeforeCreate(tx *gorm.DB) error {
@@ -368,6 +389,7 @@ func getSubscriptionPlanByIdTx(tx *gorm.DB, id int) (*SubscriptionPlan, error) {
 	if err := query.Where("id = ?", id).First(&plan).Error; err != nil {
 		return nil, err
 	}
+	plan.ApplyPricingPolicy()
 	_ = getSubscriptionPlanCache().SetWithTTL(key, plan, subscriptionPlanCacheTTL())
 	return &plan, nil
 }

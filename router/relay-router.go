@@ -144,6 +144,11 @@ func SetRelayRouter(router *gin.Engine) {
 		httpRouter.POST("/models/*path", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatGemini)
 		})
+		// Some Gemini clients keep base_url at /v1 and still send /v1beta/models/... paths.
+		// Accept /v1/v1beta/... as a compatibility alias instead of falling through to the web UI.
+		httpRouter.POST("/v1beta/models/*path", func(c *gin.Context) {
+			controller.Relay(c, types.RelayFormatGemini)
+		})
 
 		// other relay routes
 		httpRouter.POST("/moderations", func(c *gin.Context) {
