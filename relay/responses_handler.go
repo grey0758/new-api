@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	appconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -24,7 +25,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	info.InitChannelMeta(c)
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact {
 		switch info.ApiType {
-		case appconstant.APITypeOpenAI, appconstant.APITypeCodex:
+		case appconstant.APITypeOpenAI, appconstant.APITypeCodex, appconstant.APITypeCLIProxy:
 		default:
 			return types.NewErrorWithStatusCode(
 				fmt.Errorf("unsupported endpoint %q for api type %d", "/v1/responses/compact", info.ApiType),
@@ -157,5 +158,26 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	} else {
 		service.PostTextConsumeQuota(c, info, usageDto, nil)
 	}
+	persistRelayResponseRef(c, info)
 	return nil
+}
+
+func persistRelayResponseRef(c *gin.Context, info *relaycommon.RelayInfo) {
+	if c == nil || info == nil {
+		return
+	}
+	responseID := strings.TrimSpace(c.GetString("relay_response_id"))
+	if responseID == "" || info.ChannelId == 0 {
+		return
+	}
+	err := model.UpsertRelayResponseRef(&model.RelayResponseRef{
+		ResponseID: responseID,
+		UserID:     info.UserId,
+		TokenID:    info.TokenId,
+		ChannelID:  info.ChannelId,
+		ModelName:  info.OriginModelName,
+	})
+	if err != nil {
+		common.SysError(fmt.Sprintf("failed to persist relay response ref %q: %v", responseID, err))
+	}
 }

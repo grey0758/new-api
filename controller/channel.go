@@ -989,6 +989,13 @@ func FetchModels(c *gin.Context) {
 	if baseURL == "" {
 		baseURL = constant.ChannelBaseURLs[req.Type]
 	}
+	if req.Type == constant.ChannelTypeCLIProxy && strings.TrimSpace(req.BaseURL) == "" {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "CLIProxy 抓取模型需要填写 API 地址，不能留空",
+		})
+		return
+	}
 
 	// remove line breaks and extra spaces.
 	key := strings.TrimSpace(req.Key)
@@ -1057,9 +1064,23 @@ func FetchModels(c *gin.Context) {
 	}
 	//check status code
 	if response.StatusCode != http.StatusOK {
+		defer response.Body.Close()
+		var errorBody struct {
+			Error any    `json:"error"`
+			Msg   string `json:"message"`
+		}
+		if err := json.NewDecoder(response.Body).Decode(&errorBody); err == nil {
+			if errorBody.Msg != "" {
+				c.JSON(http.StatusOK, gin.H{
+					"success": false,
+					"message": fmt.Sprintf("获取模型列表失败: %s", errorBody.Msg),
+				})
+				return
+			}
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
-			"message": "Failed to fetch models",
+			"message": fmt.Sprintf("获取模型列表失败，上游状态码: %d", response.StatusCode),
 		})
 		return
 	}

@@ -131,7 +131,7 @@ const DEPRECATED_DOUBAO_CODING_PLAN_BASE_URL = 'doubao-coding-plan';
 
 // 支持并且已适配通过接口获取模型列表的渠道类型
 const MODEL_FETCHABLE_TYPES = new Set([
-  1, 4, 14, 34, 17, 26, 27, 24, 47, 25, 20, 23, 31, 40, 42, 48, 43,
+  1, 4, 14, 34, 17, 26, 27, 24, 47, 25, 20, 23, 31, 40, 42, 48, 43, 58,
 ]);
 
 function type2secretPrompt(type) {
@@ -155,6 +155,8 @@ function type2secretPrompt(type) {
       return '按照如下格式输入: AccessKey|SecretAccessKey';
     case 57:
       return '请输入 JSON 格式的 OAuth 凭据（必须包含 access_token 和 account_id）';
+    case 58:
+      return '请输入 CLIProxy 对应的 API Key';
     default:
       return '请输入渠道对应的鉴权密钥';
   }
@@ -368,6 +370,24 @@ const EditChannelModal = (props) => {
     useState(false);
   const [paramOverrideEditorVisible, setParamOverrideEditorVisible] =
     useState(false);
+  const isCLIProxyChannel = inputs.type === 58;
+  const channelBaseUrlLabel = isCLIProxyChannel
+    ? t('CLIProxy Base URL')
+    : t('API地址');
+  const channelBaseUrlPlaceholder = isCLIProxyChannel
+    ? t(
+        '请输入 CLIProxy 对外地址，例如：https://proxy.example.com，末尾不要带 /v1 和 /',
+      )
+    : t(
+        '此项可选，用于通过自定义API地址来进行 API 调用，末尾不要带/v1和/',
+      );
+  const channelBaseUrlExtraText = isCLIProxyChannel
+    ? t(
+        'CLIProxy 会用该地址抓取 /v1/models，并转发 /v1/responses 与 GET /v1/responses/:id。请填写实际代理入口；为空时不会回退到 OpenAI 官方地址。',
+      )
+    : t(
+        '对于官方渠道，new-api已经内置地址，除非是第三方代理站点或者Azure的特殊接入地址，否则不需要填写',
+      );
 
   // 密钥显示状态
   const [keyDisplayState, setKeyDisplayState] = useState({
@@ -1035,9 +1055,15 @@ const EditChannelModal = (props) => {
     //   showError(t('仅支持 OpenAI 接口格式'));
     //   return;
     // }
+    const baseURL = String(inputs?.base_url || '').trim();
+    if (inputs?.type === 58 && !isEdit && !baseURL) {
+      showError(t('CLIProxy 抓取模型前请先填写 API 地址'));
+      return null;
+    }
     setLoading(true);
     const models = [];
     let err = false;
+    let errorMessage = '';
 
     if (isEdit) {
       // 如果是编辑模式，使用已有的 channelId 获取模型列表
@@ -1048,6 +1074,7 @@ const EditChannelModal = (props) => {
         models.push(...res.data.data);
       } else {
         err = true;
+        errorMessage = res?.data?.message || '';
       }
     } else {
       // 如果是新建模式，通过后端代理获取模型列表
@@ -1059,7 +1086,7 @@ const EditChannelModal = (props) => {
           const res = await API.post(
             '/api/channel/fetch_models',
             {
-              base_url: inputs['base_url'],
+              base_url: baseURL,
               type: inputs['type'],
               key: inputs['key'],
             },
@@ -1070,10 +1097,12 @@ const EditChannelModal = (props) => {
             models.push(...res.data.data);
           } else {
             err = true;
+            errorMessage = res?.data?.message || '';
           }
         } catch (error) {
           console.error('Error fetching models:', error);
           err = true;
+          errorMessage = error?.message || '';
         }
       }
     }
@@ -1087,7 +1116,7 @@ const EditChannelModal = (props) => {
       setLoading(false);
       return uniqueModels;
     } else {
-      showError(t('获取模型列表失败'));
+      showError(errorMessage || t('获取模型列表失败'));
     }
     setLoading(false);
     return null;
@@ -2467,7 +2496,7 @@ const EditChannelModal = (props) => {
                     </Col>
                   </Row>
 
-                  {inputs.type === 1 && (
+                  {(inputs.type === 1 || inputs.type === 58) && (
                     <>
                       <div className='mt-4 mb-2 text-sm font-medium text-gray-700'>
                         {t('字段透传控制')}
@@ -2501,7 +2530,7 @@ const EditChannelModal = (props) => {
                     <Form.Switch field='claude_beta_query' label={t('Claude 强制 beta=true')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelOtherSettingsChange('claude_beta_query', value)} extraText={t('开启后，该渠道请求 Claude 时将强制追加 ?beta=true（无需客户端手动传参）')} />
                   )}
 
-                  {inputs.type === 1 && (
+                  {(inputs.type === 1 || inputs.type === 58) && (
                     <Form.Switch field='force_format' label={t('强制格式化')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('force_format', value)} extraText={t('强制将响应格式化为 OpenAI 标准格式（只适用于OpenAI渠道类型）')} />
                   )}
 
@@ -3337,6 +3366,16 @@ const EditChannelModal = (props) => {
                         />
                       )}
 
+                      {inputs.type === 58 && (
+                        <Banner
+                          type='info'
+                          description={t(
+                            'CLIProxy 按 OpenAI 兼容协议接入。建议填写实际反代入口根地址，模型抓取会请求 /v1/models，Responses 会使用 /v1/responses 与 GET /v1/responses/:id。',
+                          )}
+                          className='!rounded-lg'
+                        />
+                      )}
+
                       {inputs.type !== 3 &&
                         inputs.type !== 8 &&
                         inputs.type !== 22 &&
@@ -3345,18 +3384,14 @@ const EditChannelModal = (props) => {
                           <div>
                             <Form.Input
                               field='base_url'
-                              label={t('API地址')}
-                              placeholder={t(
-                                '此项可选，用于通过自定义API地址来进行 API 调用，末尾不要带/v1和/',
-                              )}
+                              label={channelBaseUrlLabel}
+                              placeholder={channelBaseUrlPlaceholder}
                               onChange={(value) =>
                                 handleInputChange('base_url', value)
                               }
                               showClear
                               disabled={isIonetLocked}
-                              extraText={t(
-                                '对于官方渠道，new-api已经内置地址，除非是第三方代理站点或者Azure的特殊接入地址，否则不需要填写',
-                              )}
+                              extraText={channelBaseUrlExtraText}
                             />
                           </div>
                         )}

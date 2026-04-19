@@ -244,6 +244,9 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 	if channel.GetBaseURL() != "" {
 		baseURL = channel.GetBaseURL()
 	}
+	if channel.Type == constant.ChannelTypeCLIProxy && strings.TrimSpace(baseURL) == "" {
+		return nil, fmt.Errorf("CLIProxy 抓取模型前请先填写 API 地址")
+	}
 
 	if channel.Type == constant.ChannelTypeOllama {
 		key := strings.TrimSpace(strings.Split(channel.Key, "\n")[0])
