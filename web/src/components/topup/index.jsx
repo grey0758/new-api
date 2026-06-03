@@ -77,6 +77,7 @@ const TopUp = () => {
   const [waffoMinTopUp, setWaffoMinTopUp] = useState(1);
   const [enableWaffoPancakeTopUp, setEnableWaffoPancakeTopUp] = useState(false);
   const [waffoPancakeMinTopUp, setWaffoPancakeMinTopUp] = useState(1);
+  const [enableWxDaEpayTopUp, setEnableWxDaEpayTopUp] = useState(false);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [open, setOpen] = useState(false);
@@ -133,6 +134,9 @@ const TopUp = () => {
       ? configuredMinTopUp
       : minTopUp;
   };
+
+  const isWxDaEpayMethod = (payment) =>
+    typeof payment === 'string' && payment.startsWith('wxda_epay:');
 
   const requestAmountByPayment = async (payment, value) => {
     if (payment === 'stripe') {
@@ -205,6 +209,11 @@ const TopUp = () => {
     } else if (payment.startsWith('waffo:')) {
       if (!enableWaffoTopUp) {
         showError(t('管理员未开启 Waffo 充值！'));
+        return;
+      }
+    } else if (isWxDaEpayMethod(payment)) {
+      if (!enableWxDaEpayTopUp) {
+        showError(t('管理员未开启 wxDa 支付充值！'));
         return;
       }
     } else {
@@ -280,6 +289,11 @@ const TopUp = () => {
         res = await API.post('/api/user/stripe/pay', {
           amount: parseInt(topUpCount),
           payment_method: 'stripe',
+        });
+      } else if (isWxDaEpayMethod(payWay)) {
+        res = await API.post('/api/user/wxda-epay/pay', {
+          amount: parseInt(topUpCount),
+          payment_method: payWay,
         });
       } else {
         // 普通支付请求
@@ -639,6 +653,7 @@ const TopUp = () => {
           const enableWaffoTopUp = data.enable_waffo_topup || false;
           const enableWaffoPancakeTopUp =
             data.enable_waffo_pancake_topup || false;
+          const enableWxDaEpayTopUp = data.enable_wxda_epay_topup || false;
           const minTopUpValue = enableOnlineTopUp
             ? data.min_topup
             : enableStripeTopUp
@@ -647,7 +662,9 @@ const TopUp = () => {
                 ? data.waffo_min_topup
                 : enableWaffoPancakeTopUp
                   ? data.waffo_pancake_min_topup
-                : 1;
+                  : enableWxDaEpayTopUp
+                    ? data.min_topup
+                    : 1;
           setEnableOnlineTopUp(enableOnlineTopUp);
           setEnableStripeTopUp(enableStripeTopUp);
           setEnableCreemTopUp(enableCreemTopUp);
@@ -656,6 +673,7 @@ const TopUp = () => {
           setWaffoMinTopUp(data.waffo_min_topup || 1);
           setEnableWaffoPancakeTopUp(enableWaffoPancakeTopUp);
           setWaffoPancakeMinTopUp(data.waffo_pancake_min_topup || 1);
+          setEnableWxDaEpayTopUp(enableWxDaEpayTopUp);
           setMinTopUp(minTopUpValue);
           setTopUpCount(minTopUpValue);
 
@@ -951,6 +969,7 @@ const TopUp = () => {
           creemPreTopUp={creemPreTopUp}
           enableWaffoTopUp={enableWaffoTopUp}
           enableWaffoPancakeTopUp={enableWaffoPancakeTopUp}
+          enableWxDaEpayTopUp={enableWxDaEpayTopUp}
           presetAmounts={presetAmounts}
           selectedPreset={selectedPreset}
           selectPresetAmount={selectPresetAmount}

@@ -25,45 +25,14 @@ func ModelMappedHelper(c *gin.Context, info *common.RelayInfo, request dto.Reque
 		mappingModelName = strings.TrimSuffix(originModelName, ratio_setting.CompactModelSuffix)
 	}
 
-	// map model name
 	modelMapping := c.GetString("model_mapping")
-	if modelMapping != "" && modelMapping != "{}" {
-		modelMap := make(map[string]string)
-		err := json.Unmarshal([]byte(modelMapping), &modelMap)
-		if err != nil {
-			return fmt.Errorf("unmarshal_model_mapping_failed")
-		}
-
-		// 支持链式模型重定向，最终使用链尾的模型
-		currentModel := mappingModelName
-		visitedModels := map[string]bool{
-			currentModel: true,
-		}
-		for {
-			if mappedModel, exists := modelMap[currentModel]; exists && mappedModel != "" {
-				// 模型重定向循环检测，避免无限循环
-				if visitedModels[mappedModel] {
-					if mappedModel == currentModel {
-						if currentModel == info.OriginModelName {
-							info.IsModelMapped = false
-							return nil
-						} else {
-							info.IsModelMapped = true
-							break
-						}
-					}
-					return errors.New("model_mapping_contains_cycle")
-				}
-				visitedModels[mappedModel] = true
-				currentModel = mappedModel
-				info.IsModelMapped = true
-			} else {
-				break
-			}
-		}
-		if info.IsModelMapped {
-			info.UpstreamModelName = currentModel
-		}
+	mappedModel, isMapped, err := ResolveMappedModelName(mappingModelName, modelMapping)
+	if err != nil {
+		return err
+	}
+	if isMapped {
+		info.IsModelMapped = true
+		info.UpstreamModelName = mappedModel
 	}
 
 	if isResponsesCompact {
@@ -78,4 +47,35 @@ func ModelMappedHelper(c *gin.Context, info *common.RelayInfo, request dto.Reque
 		request.SetModelName(info.UpstreamModelName)
 	}
 	return nil
+}
+
+func ResolveMappedModelName(originModelName string, modelMapping string) (string, bool, error) {
+	if modelMapping == "" || modelMapping == "{}" {
+		return originModelName, false, nil
+	}
+
+	modelMap := make(map[string]string)
+	err := json.Unmarshal([]byte(modelMapping), &modelMap)
+	if err != nil {
+		return "", false, fmt.Errorf("unmarshal_model_mapping_failed")
+	}
+
+	currentModel := originModelName
+	visitedModels := map[string]bool{
+		currentModel: true,
+	}
+	for {
+		mappedModel, exists := modelMap[currentModel]
+		if !exists || mappedModel == "" {
+			return currentModel, currentModel != originModelName, nil
+		}
+		if visitedModels[mappedModel] {
+			if mappedModel == currentModel {
+				return currentModel, currentModel != originModelName, nil
+			}
+			return "", false, errors.New("model_mapping_contains_cycle")
+		}
+		visitedModels[mappedModel] = true
+		currentModel = mappedModel
+	}
 }

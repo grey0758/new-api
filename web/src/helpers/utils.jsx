@@ -32,17 +32,74 @@ const HTMLToastContent = ({ htmlContent }) => {
   return <div dangerouslySetInnerHTML={{ __html: htmlContent }} />;
 };
 export default HTMLToastContent;
+
+const USER_CACHE_KEY = '__NEW_API_CURRENT_USER__';
+
+function readCachedUser() {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  return window[USER_CACHE_KEY] || null;
+}
+
+function parseUserRecord(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value === 'object') {
+    return value;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+export function syncCachedUser(data) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window[USER_CACHE_KEY] = data || null;
+}
+
+export function clearUserData() {
+  if (typeof window !== 'undefined') {
+    window[USER_CACHE_KEY] = null;
+  }
+  localStorage.removeItem('user');
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key !== 'user') {
+      return;
+    }
+    if (!event.newValue) {
+      clearUserData();
+      return;
+    }
+    try {
+      syncCachedUser(JSON.parse(event.newValue));
+    } catch {
+      clearUserData();
+    }
+  });
+}
+
 export function isAdmin() {
-  let user = localStorage.getItem('user');
+  let user = parseUserRecord(readCachedUser() || localStorage.getItem('user'));
   if (!user) return false;
-  user = JSON.parse(user);
   return user.role >= 10;
 }
 
 export function isRoot() {
-  let user = localStorage.getItem('user');
+  let user = parseUserRecord(readCachedUser() || localStorage.getItem('user'));
   if (!user) return false;
-  user = JSON.parse(user);
   return user.role >= 100;
 }
 
@@ -59,9 +116,14 @@ export function getLogo() {
 }
 
 export function getUserIdFromLocalStorage() {
-  let user = localStorage.getItem('user');
+  const cachedUser = readCachedUser();
+  if (cachedUser && typeof cachedUser === 'object' && Number.isInteger(Number(cachedUser.id))) {
+    return Number(cachedUser.id);
+  }
+
+  const user = parseUserRecord(localStorage.getItem('user'));
   if (!user) return -1;
-  user = JSON.parse(user);
+  syncCachedUser(user);
   return user.id;
 }
 
@@ -126,7 +188,7 @@ export function showError(error) {
       switch (error.response.status) {
         case 401:
           // 清除用户状态
-          localStorage.removeItem('user');
+          clearUserData();
           // toast.error('错误：未登录或登录已过期，请重新登录！', showErrorOptions);
           window.location.href = '/login?expired=true';
           break;

@@ -3,6 +3,7 @@ package controller
 import (
 	"strings"
 
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
@@ -97,4 +98,29 @@ func isEpayWebhookConfigured() bool {
 
 func isEpayWebhookEnabled() bool {
 	return isEpayTopUpEnabled()
+}
+
+func isWxDaEpayTopUpEnabled() bool {
+	if !setting.WxDaEpayEnabled {
+		return false
+	}
+	if strings.TrimSpace(setting.WxDaEpayAddress) == "" ||
+		strings.TrimSpace(setting.WxDaEpayPid) == "" {
+		return false
+	}
+	if !setting.WxDaEpayAlipayEnabled && !setting.WxDaEpayWxpayEnabled {
+		return false
+	}
+
+	switch service.NormalizeWxDaEpaySignType(setting.WxDaEpaySignType) {
+	case service.WxDaEpaySignTypeRSA:
+		return strings.TrimSpace(setting.WxDaEpayMerchantPrivateKey) != "" &&
+			strings.TrimSpace(setting.WxDaEpayPlatformPublicKey) != ""
+	default:
+		return strings.TrimSpace(setting.WxDaEpayMD5Key) != ""
+	}
+}
+
+func isWxDaEpayWebhookEnabled() bool {
+	return isWxDaEpayTopUpEnabled()
 }

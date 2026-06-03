@@ -191,6 +191,7 @@ export const useApiRequest = (
             'Content-Type': 'application/json',
             'New-Api-User': getUserIdFromLocalStorage(),
           },
+          credentials: 'same-origin',
           body: JSON.stringify(payload),
         });
 
@@ -319,6 +320,7 @@ export const useApiRequest = (
           'New-Api-User': getUserIdFromLocalStorage(),
         },
         method: 'POST',
+        withCredentials: true,
         payload: JSON.stringify(payload),
       });
 

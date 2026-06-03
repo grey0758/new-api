@@ -622,11 +622,13 @@ func TestStreamScannerHandler_StreamStatus_PreInitialized(t *testing.T) {
 
 	info.StreamStatus = relaycommon.NewStreamStatus()
 	info.StreamStatus.RecordError("pre-existing error")
+	previousStatus := info.StreamStatus
 
 	StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {})
 
+	assert.NotSame(t, previousStatus, info.StreamStatus)
 	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
-	assert.Equal(t, 1, info.StreamStatus.TotalErrorCount())
+	assert.Equal(t, 0, info.StreamStatus.TotalErrorCount())
 }
 
 func TestStreamScannerHandler_PingInterleavesWithSlowUpstream(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	openaichannel "github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -155,6 +156,20 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 			}
 		}
 
+		if info.RelayMode == relayconstant.RelayModeChatCompletions && !info.IsStream && info.RelayFormat == types.RelayFormatOpenAI {
+			forceStream := true
+			switch req := convertedRequest.(type) {
+			case *dto.GeneralOpenAIRequest:
+				req.Stream = &forceStream
+			case dto.GeneralOpenAIRequest:
+				req.Stream = &forceStream
+				convertedRequest = req
+			}
+			if c.Request.Header.Get("Accept") == "" || c.Request.Header.Get("Accept") == "*/*" {
+				c.Request.Header.Set("Accept", "text/event-stream")
+			}
+		}
+
 		jsonData, err := common.Marshal(convertedRequest)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeJsonMarshalFailed, types.ErrOptionWithSkipRetry())
@@ -189,13 +204,31 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 
 	if resp != nil {
 		httpResp = resp.(*http.Response)
-		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
+		upstreamIsStream := strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		if httpResp.StatusCode != http.StatusOK {
 			newApiErr := service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 			// reset status code 重置状态码
 			service.ResetStatusCode(newApiErr, statusCodeMappingStr)
 			return newApiErr
 		}
+		if upstreamIsStream && !info.IsStream && info.RelayMode == relayconstant.RelayModeChatCompletions {
+			usage, newApiErr := openaichannel.OaiResponsesStreamToChatHandler(c, info, httpResp)
+			if newApiErr != nil {
+				service.ResetStatusCode(newApiErr, statusCodeMappingStr)
+				return newApiErr
+			}
+
+			var containAudioTokens = usage.CompletionTokenDetails.AudioTokens > 0 || usage.PromptTokensDetails.AudioTokens > 0
+			var containsAudioRatios = ratio_setting.ContainsAudioRatio(info.OriginModelName) || ratio_setting.ContainsAudioCompletionRatio(info.OriginModelName)
+
+			if containAudioTokens && containsAudioRatios {
+				service.PostAudioConsumeQuota(c, info, usage, "")
+			} else {
+				service.PostTextConsumeQuota(c, info, usage, nil)
+			}
+			return nil
+		}
+		info.IsStream = info.IsStream || upstreamIsStream
 	}
 
 	usage, newApiErr := adaptor.DoResponse(c, httpResp, info)

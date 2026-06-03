@@ -164,3 +164,50 @@ func TestEpayWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
 	operation_setting.PayMethods = nil
 	require.False(t, isEpayWebhookEnabled())
 }
+
+func TestWxDaEpayWebhookEnabledRequiresMatchingSignConfig(t *testing.T) {
+	originalEnabled := setting.WxDaEpayEnabled
+	originalAddress := setting.WxDaEpayAddress
+	originalPid := setting.WxDaEpayPid
+	originalSignType := setting.WxDaEpaySignType
+	originalMD5Key := setting.WxDaEpayMD5Key
+	originalPlatformPublicKey := setting.WxDaEpayPlatformPublicKey
+	originalMerchantPrivateKey := setting.WxDaEpayMerchantPrivateKey
+	originalAlipayEnabled := setting.WxDaEpayAlipayEnabled
+	originalWxpayEnabled := setting.WxDaEpayWxpayEnabled
+	t.Cleanup(func() {
+		setting.WxDaEpayEnabled = originalEnabled
+		setting.WxDaEpayAddress = originalAddress
+		setting.WxDaEpayPid = originalPid
+		setting.WxDaEpaySignType = originalSignType
+		setting.WxDaEpayMD5Key = originalMD5Key
+		setting.WxDaEpayPlatformPublicKey = originalPlatformPublicKey
+		setting.WxDaEpayMerchantPrivateKey = originalMerchantPrivateKey
+		setting.WxDaEpayAlipayEnabled = originalAlipayEnabled
+		setting.WxDaEpayWxpayEnabled = originalWxpayEnabled
+	})
+
+	setting.WxDaEpayEnabled = true
+	setting.WxDaEpayAddress = "https://epayapi.example.com"
+	setting.WxDaEpayPid = "1001"
+	setting.WxDaEpayAlipayEnabled = true
+	setting.WxDaEpayWxpayEnabled = false
+	setting.WxDaEpaySignType = "MD5"
+	setting.WxDaEpayMD5Key = ""
+	require.False(t, isWxDaEpayWebhookEnabled())
+
+	setting.WxDaEpayMD5Key = "md5_key"
+	require.True(t, isWxDaEpayWebhookEnabled())
+
+	setting.WxDaEpaySignType = "RSA"
+	setting.WxDaEpayPlatformPublicKey = "public"
+	setting.WxDaEpayMerchantPrivateKey = ""
+	require.False(t, isWxDaEpayWebhookEnabled())
+
+	setting.WxDaEpayMerchantPrivateKey = "private"
+	require.True(t, isWxDaEpayWebhookEnabled())
+
+	setting.WxDaEpayAlipayEnabled = false
+	setting.WxDaEpayWxpayEnabled = false
+	require.False(t, isWxDaEpayWebhookEnabled())
+}

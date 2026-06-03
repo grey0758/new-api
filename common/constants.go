@@ -107,6 +107,10 @@ var QuotaForInvitee = 0
 var ChannelDisableThreshold = 5.0
 var AutomaticDisableChannelEnabled = false
 var AutomaticEnableChannelEnabled = false
+var AutomaticChannelCooldownEnabled = true
+var ChannelCooldownFailureThreshold = 3
+var ChannelCooldownFailureWindowSeconds = 120
+var ChannelCooldownSeconds = 300
 var QuotaRemindThreshold = 1000
 var PreConsumedQuota = 500
 

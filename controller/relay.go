@@ -88,6 +88,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	defer func() {
 		if newAPIError != nil {
 			logger.LogError(c, fmt.Sprintf("relay error: %s", newAPIError.Error()))
+			newAPIError = sanitizeRelayErrorForUser(c, newAPIError)
 			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
 			switch relayFormat {
 			case types.RelayFormatOpenAIRealtime:
@@ -186,50 +187,60 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
 
-	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
-		relayInfo.RetryIndex = retryParam.GetRetry()
-		channel, channelErr := getChannel(c, relayInfo, retryParam)
-		if channelErr != nil {
-			logger.LogError(c, channelErr.Error())
-			newAPIError = channelErr
-			break
+	for cycle := 0; cycle < maxRelayChannelSelectionCycles(c, relayInfo); cycle++ {
+		if cycle > 0 {
+			retryParam.ResetSelectionCycle()
+			logger.LogInfo(c, fmt.Sprintf("渠道选择进入第 %d/%d 轮", cycle+1, maxRelayChannelSelectionCycles(c, relayInfo)))
 		}
-
-		addUsedChannel(c, channel.Id)
-		bodyStorage, bodyErr := common.GetBodyStorage(c)
-		if bodyErr != nil {
-			// Ensure consistent 413 for oversized bodies even when error occurs later (e.g., retry path)
-			if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {
-				newAPIError = types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, types.ErrOptionWithSkipRetry())
-			} else {
-				newAPIError = types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
+			relayInfo.RetryIndex = retryParam.GetRetry()
+			channel, channelErr := getChannel(c, relayInfo, retryParam)
+			if channelErr != nil {
+				logger.LogError(c, channelErr.Error())
+				newAPIError = channelErr
+				break
 			}
-			break
+
+			addUsedChannel(c, channel.Id)
+			bodyStorage, bodyErr := common.GetBodyStorage(c)
+			if bodyErr != nil {
+				// Ensure consistent 413 for oversized bodies even when error occurs later (e.g., retry path)
+				if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {
+					newAPIError = types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, types.ErrOptionWithSkipRetry())
+				} else {
+					newAPIError = types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+				}
+				break
+			}
+			c.Request.Body = io.NopCloser(bodyStorage)
+
+			switch relayFormat {
+			case types.RelayFormatOpenAIRealtime:
+				newAPIError = relay.WssHelper(c, relayInfo)
+			case types.RelayFormatClaude:
+				newAPIError = relay.ClaudeHelper(c, relayInfo)
+			case types.RelayFormatGemini:
+				newAPIError = geminiRelayHandler(c, relayInfo)
+			default:
+				newAPIError = relayHandler(c, relayInfo)
+			}
+
+			if newAPIError == nil {
+				relayInfo.LastError = nil
+				return
+			}
+
+			newAPIError = service.NormalizeViolationFeeError(newAPIError)
+			relayInfo.LastError = newAPIError
+
+			processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+
+			if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry(), channel.Id) {
+				break
+			}
+			retryParam.ExcludeChannel(channel.Id)
 		}
-		c.Request.Body = io.NopCloser(bodyStorage)
-
-		switch relayFormat {
-		case types.RelayFormatOpenAIRealtime:
-			newAPIError = relay.WssHelper(c, relayInfo)
-		case types.RelayFormatClaude:
-			newAPIError = relay.ClaudeHelper(c, relayInfo)
-		case types.RelayFormatGemini:
-			newAPIError = geminiRelayHandler(c, relayInfo)
-		default:
-			newAPIError = relayHandler(c, relayInfo)
-		}
-
-		if newAPIError == nil {
-			relayInfo.LastError = nil
-			return
-		}
-
-		newAPIError = service.NormalizeViolationFeeError(newAPIError)
-		relayInfo.LastError = newAPIError
-
-		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
-
-		if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) {
+		if !shouldStartNextRelayChannelSelectionCycle(c, relayInfo, newAPIError, cycle) {
 			break
 		}
 	}
@@ -246,6 +257,44 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true // 允许跨域
 	},
+}
+
+const relayChannelSelectionCycles = 2
+
+func maxRelayChannelSelectionCycles(c *gin.Context, info *relaycommon.RelayInfo) int {
+	if c == nil || info == nil || info.ChannelMeta == nil {
+		return 1
+	}
+	if _, ok := c.Get("specific_channel_id"); ok {
+		return 1
+	}
+	if relayChannelSelectionCycles < 1 {
+		return 1
+	}
+	return relayChannelSelectionCycles
+}
+
+func shouldStartNextRelayChannelSelectionCycle(c *gin.Context, info *relaycommon.RelayInfo, err *types.NewAPIError, cycle int) bool {
+	if cycle+1 >= maxRelayChannelSelectionCycles(c, info) {
+		return false
+	}
+	if c == nil || info == nil || info.ChannelMeta == nil {
+		return false
+	}
+	if _, ok := c.Get("specific_channel_id"); ok {
+		return false
+	}
+	retryErr := err
+	if info.LastError != nil {
+		retryErr = info.LastError
+	}
+	if retryErr == nil || types.IsSkipRetryError(retryErr) {
+		return false
+	}
+	if service.IsTransientRelayFailoverError(retryErr) {
+		return true
+	}
+	return shouldRetryRelayError(retryErr)
 }
 
 func addUsedChannel(c *gin.Context, channelId int) {
@@ -315,14 +364,12 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	return channel, nil
 }
 
-func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
+func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int, channelId int) bool {
 	if openaiErr == nil {
 		return false
 	}
-	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
-		return false
-	}
 	if types.IsChannelError(openaiErr) {
+		service.ClearCurrentChannelAffinity(c)
 		return true
 	}
 	if types.IsSkipRetryError(openaiErr) {
@@ -332,6 +379,23 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 		return false
 	}
 	if _, ok := c.Get("specific_channel_id"); ok {
+		return false
+	}
+	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
+		if service.IsTransientRelayFailoverError(openaiErr) || service.ShouldDisableChannel(openaiErr) || service.IsChannelCoolingDown(channelId) {
+			service.ClearCurrentChannelAffinity(c)
+		} else {
+			return false
+		}
+	}
+	if service.IsTransientRelayFailoverError(openaiErr) {
+		return true
+	}
+	return shouldRetryRelayError(openaiErr)
+}
+
+func shouldRetryRelayError(openaiErr *types.NewAPIError) bool {
+	if openaiErr == nil {
 		return false
 	}
 	code := openaiErr.StatusCode
@@ -349,6 +413,8 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, err.Error()))
+	c.Set("relay_channel_error_seen", true)
+	service.RecordChannelFailureForCooldown(channelError, err)
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
 	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
 	if service.ShouldDisableChannel(err) && channelError.AutoBan {
@@ -596,25 +662,94 @@ func RelayTask(c *gin.Context) {
 	}
 }
 
-// respondTaskError 统一输出 Task 错误响应（含 429 限流提示改写）
+const relayUserVisibleChannelErrorMessage = "号池额度已耗尽正在切换号池，请重试"
+
+// respondTaskError 统一输出 Task 错误响应，不向用户透传上游错误内容。
 func respondTaskError(c *gin.Context, taskErr *dto.TaskError) {
 	if taskErr.StatusCode == http.StatusTooManyRequests {
-		taskErr.Message = "当前分组上游负载已饱和，请稍后再试"
+		taskErr.Message = relayUserVisibleChannelErrorMessage
+	} else if !taskErr.LocalError && taskErr.StatusCode >= http.StatusInternalServerError {
+		taskErr.Message = relayUserVisibleChannelErrorMessage
+		taskErr.Code = string(types.ErrorCodeBadResponseStatusCode)
 	}
 	c.JSON(taskErr.StatusCode, taskErr)
+}
+
+func sanitizeRelayErrorForUser(c *gin.Context, err *types.NewAPIError) *types.NewAPIError {
+	if err == nil {
+		return nil
+	}
+	if !shouldHideRelayErrorFromUser(c, err) {
+		return err
+	}
+	statusCode := err.StatusCode
+	if statusCode < http.StatusInternalServerError {
+		statusCode = http.StatusServiceUnavailable
+	}
+	return types.NewErrorWithStatusCode(
+		errors.New(relayUserVisibleChannelErrorMessage),
+		types.ErrorCodeBadResponseStatusCode,
+		statusCode,
+		types.ErrOptionWithSkipRetry(),
+	)
+}
+
+func shouldHideRelayErrorFromUser(c *gin.Context, err *types.NewAPIError) bool {
+	if err == nil {
+		return false
+	}
+	if c != nil && c.GetBool("relay_channel_error_seen") {
+		return true
+	}
+	if types.IsChannelError(err) {
+		return true
+	}
+	switch err.GetErrorCode() {
+	case types.ErrorCodeGetChannelFailed,
+		types.ErrorCodeChannelNoAvailableKey,
+		types.ErrorCodeChannelInvalidKey,
+		types.ErrorCodeChannelResponseTimeExceeded,
+		types.ErrorCodeChannelAwsClientError,
+		types.ErrorCodeChannelHeaderOverrideInvalid,
+		types.ErrorCodeChannelParamOverrideInvalid,
+		types.ErrorCodeChannelModelMappedError,
+		types.ErrorCodePromptBlocked,
+		types.ErrorCodeModelNotFound,
+		types.ErrorCodeEmptyResponse:
+		return true
+	case types.ErrorCodeDoRequestFailed,
+		types.ErrorCodeReadResponseBodyFailed,
+		types.ErrorCodeBadResponseStatusCode,
+		types.ErrorCodeBadResponse,
+		types.ErrorCodeBadResponseBody,
+		types.ErrorCodeAwsInvokeError:
+		return true
+	}
+	return false
 }
 
 func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError, retryTimes int) bool {
 	if taskErr == nil {
 		return false
 	}
-	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
-		return false
-	}
 	if retryTimes <= 0 {
 		return false
 	}
 	if _, ok := c.Get("specific_channel_id"); ok {
+		return false
+	}
+	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
+		if service.IsChannelCoolingDown(channelId) && shouldRetryTaskError(taskErr) {
+			service.ClearCurrentChannelAffinity(c)
+		} else {
+			return false
+		}
+	}
+	return shouldRetryTaskError(taskErr)
+}
+
+func shouldRetryTaskError(taskErr *dto.TaskError) bool {
+	if taskErr == nil {
 		return false
 	}
 	if taskErr.StatusCode == http.StatusTooManyRequests {

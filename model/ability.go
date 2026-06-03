@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/samber/lo"
 	"gorm.io/gorm"
@@ -104,6 +105,14 @@ func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
 }
 
 func GetChannel(group string, model string, retry int) (*Channel, error) {
+	return GetChannelExcluding(group, model, retry, nil)
+}
+
+func GetChannelExcluding(group string, model string, retry int, excludedChannelIds map[int]bool) (*Channel, error) {
+	if len(excludedChannelIds) > 0 {
+		return getBestAvailableChannelExcluding(group, model, excludedChannelIds)
+	}
+
 	var abilities []Ability
 
 	var err error = nil
@@ -141,6 +150,95 @@ func GetChannel(group string, model string, retry int) (*Channel, error) {
 	}
 	err = DB.First(&channel, "id = ?", channel.Id).Error
 	return &channel, err
+}
+
+func getBestAvailableChannelExcluding(group string, modelName string, excludedChannelIds map[int]bool) (*Channel, error) {
+	abilities, err := getEnabledAbilitiesByGroupModel(group, modelName)
+	if err != nil {
+		return nil, err
+	}
+	if len(abilities) == 0 {
+		normalizedModel := ratio_setting.FormatMatchingModelName(modelName)
+		if normalizedModel != "" && normalizedModel != modelName {
+			abilities, err = getEnabledAbilitiesByGroupModel(group, normalizedModel)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if len(abilities) == 0 {
+		return nil, nil
+	}
+
+	var targetAbilities []Ability
+	var targetPriority int64
+	hasPriority := false
+	for _, ability := range abilities {
+		if excludedChannelIds[ability.ChannelId] {
+			continue
+		}
+		priority := abilityPriority(ability)
+		if !hasPriority || priority > targetPriority {
+			targetPriority = priority
+			targetAbilities = []Ability{ability}
+			hasPriority = true
+			continue
+		}
+		if priority == targetPriority {
+			targetAbilities = append(targetAbilities, ability)
+		}
+	}
+	if len(targetAbilities) == 0 {
+		return nil, nil
+	}
+
+	selectedChannelId := chooseWeightedAbilityChannelId(targetAbilities)
+	if selectedChannelId == 0 {
+		return nil, errors.New("channel not found")
+	}
+
+	channel := Channel{}
+	err = DB.First(&channel, "id = ?", selectedChannelId).Error
+	return &channel, err
+}
+
+func getEnabledAbilitiesByGroupModel(group string, modelName string) ([]Ability, error) {
+	var abilities []Ability
+	err := DB.Model(&Ability{}).
+		Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, modelName, true).
+		Order("priority DESC, weight DESC").
+		Find(&abilities).Error
+	return abilities, err
+}
+
+func abilityPriority(ability Ability) int64 {
+	if ability.Priority == nil {
+		return 0
+	}
+	return *ability.Priority
+}
+
+func chooseWeightedAbilityChannelId(abilities []Ability) int {
+	if len(abilities) == 0 {
+		return 0
+	}
+	if len(abilities) == 1 {
+		return abilities[0].ChannelId
+	}
+
+	weightSum := uint(0)
+	for _, ability := range abilities {
+		weightSum += ability.Weight + 10
+	}
+
+	weight := common.GetRandomInt(int(weightSum))
+	for _, ability := range abilities {
+		weight -= int(ability.Weight) + 10
+		if weight <= 0 {
+			return ability.ChannelId
+		}
+	}
+	return abilities[len(abilities)-1].ChannelId
 }
 
 func (channel *Channel) AddAbilities(tx *gorm.DB) error {

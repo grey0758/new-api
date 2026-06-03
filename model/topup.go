@@ -24,10 +24,12 @@ type TopUp struct {
 }
 
 const (
-	PaymentMethodStripe       = "stripe"
-	PaymentMethodCreem        = "creem"
-	PaymentMethodWaffo        = "waffo"
-	PaymentMethodWaffoPancake = "waffo_pancake"
+	PaymentMethodStripe         = "stripe"
+	PaymentMethodCreem          = "creem"
+	PaymentMethodWaffo          = "waffo"
+	PaymentMethodWaffoPancake   = "waffo_pancake"
+	PaymentMethodWxDaEpayAlipay = "wxda_epay:alipay"
+	PaymentMethodWxDaEpayWxpay  = "wxda_epay:wxpay"
 )
 
 var (

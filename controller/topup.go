@@ -90,12 +90,33 @@ func GetTopUpInfo(c *gin.Context) {
 		}
 	}
 
+	enableWxDaEpay := isWxDaEpayTopUpEnabled()
+	if enableWxDaEpay {
+		if setting.WxDaEpayAlipayEnabled {
+			payMethods = append(payMethods, map[string]string{
+				"name":      "wxDa 支付宝",
+				"type":      model.PaymentMethodWxDaEpayAlipay,
+				"color":     "rgba(var(--semi-blue-5), 1)",
+				"min_topup": strconv.Itoa(operation_setting.MinTopUp),
+			})
+		}
+		if setting.WxDaEpayWxpayEnabled {
+			payMethods = append(payMethods, map[string]string{
+				"name":      "wxDa 微信",
+				"type":      model.PaymentMethodWxDaEpayWxpay,
+				"color":     "rgba(var(--semi-green-5), 1)",
+				"min_topup": strconv.Itoa(operation_setting.MinTopUp),
+			})
+		}
+	}
+
 	data := gin.H{
 		"enable_online_topup":        isEpayTopUpEnabled(),
 		"enable_stripe_topup":        isStripeTopUpEnabled(),
 		"enable_creem_topup":         isCreemTopUpEnabled(),
 		"enable_waffo_topup":         enableWaffo,
 		"enable_waffo_pancake_topup": enableWaffoPancake,
+		"enable_wxda_epay_topup":     enableWxDaEpay,
 		"waffo_pay_methods": func() interface{} {
 			if enableWaffo {
 				return setting.GetWaffoPayMethods()
@@ -128,6 +149,8 @@ var nonEpayPaymentMethodsForCallback = []string{
 	model.PaymentMethodCreem,
 	model.PaymentMethodWaffo,
 	model.PaymentMethodWaffoPancake,
+	model.PaymentMethodWxDaEpayAlipay,
+	model.PaymentMethodWxDaEpayWxpay,
 }
 
 func isNonEpayPaymentMethodForEpayCallback(paymentMethod string) bool {

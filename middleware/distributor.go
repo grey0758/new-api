@@ -103,10 +103,7 @@ func Distribute() func(c *gin.Context) {
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					if err == nil && preferred != nil {
 						if preferred.Status != common.ChannelStatusEnabled {
-							if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
-								abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
-								return
-							}
+							service.ClearCurrentChannelAffinity(c)
 						} else if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 							autoGroups := service.GetUserAutoGroup(userGroup)
@@ -119,11 +116,18 @@ func Distribute() func(c *gin.Context) {
 									break
 								}
 							}
+							if channel == nil {
+								service.ClearCurrentChannelAffinity(c)
+							}
 						} else if model.IsChannelEnabledForGroupModel(usingGroup, modelRequest.Model, preferred.Id) {
 							channel = preferred
 							selectGroup = usingGroup
 							service.MarkChannelAffinityUsed(c, usingGroup, preferred.Id)
+						} else {
+							service.ClearCurrentChannelAffinity(c)
 						}
+					} else {
+						service.ClearCurrentChannelAffinity(c)
 					}
 				}
 

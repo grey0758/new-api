@@ -25,6 +25,7 @@ import SettingsPaymentGatewayStripe from '../../pages/Setting/Payment/SettingsPa
 import SettingsPaymentGatewayCreem from '../../pages/Setting/Payment/SettingsPaymentGatewayCreem';
 import SettingsPaymentGatewayWaffo from '../../pages/Setting/Payment/SettingsPaymentGatewayWaffo';
 import SettingsPaymentGatewayWaffoPancake from '../../pages/Setting/Payment/SettingsPaymentGatewayWaffoPancake';
+import SettingsPaymentGatewayWxDaEpay from '../../pages/Setting/Payment/SettingsPaymentGatewayWxDaEpay';
 import { API, showError, toBoolean } from '../../helpers';
 import { useTranslation } from 'react-i18next';
 
@@ -60,6 +61,17 @@ const PaymentSetting = () => {
     WaffoPancakeCurrency: 'USD',
     WaffoPancakeUnitPrice: 1.0,
     WaffoPancakeMinTopUp: 1,
+
+    WxDaEpayEnabled: false,
+    WxDaEpayAddress: '',
+    WxDaEpayPid: '',
+    WxDaEpaySignType: 'MD5',
+    WxDaEpayMD5Key: '',
+    WxDaEpayPlatformPublicKey: '',
+    WxDaEpayMerchantPrivateKey: '',
+    WxDaEpaySubmitPath: '',
+    WxDaEpayAlipayEnabled: true,
+    WxDaEpayWxpayEnabled: true,
   });
 
   let [loading, setLoading] = useState(false);
@@ -121,6 +133,9 @@ const PaymentSetting = () => {
             newInputs[item.key] = item.value;
             break;
           case 'WaffoPancakeSandbox':
+          case 'WxDaEpayEnabled':
+          case 'WxDaEpayAlipayEnabled':
+          case 'WxDaEpayWxpayEnabled':
             newInputs[item.key] = toBoolean(item.value);
             break;
           default:
@@ -172,6 +187,13 @@ const PaymentSetting = () => {
             </Tabs.TabPane>
             <Tabs.TabPane tab={t('易支付设置')} itemKey='epay'>
               <SettingsPaymentGateway
+                options={inputs}
+                refresh={onRefresh}
+                hideSectionTitle
+              />
+            </Tabs.TabPane>
+            <Tabs.TabPane tab={t('wxDa 支付设置')} itemKey='wxda-epay'>
+              <SettingsPaymentGatewayWxDaEpay
                 options={inputs}
                 refresh={onRefresh}
                 hideSectionTitle

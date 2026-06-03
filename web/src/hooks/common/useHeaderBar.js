@@ -23,7 +23,7 @@ import { useTranslation } from 'react-i18next';
 import { UserContext } from '../../context/User';
 import { StatusContext } from '../../context/Status';
 import { useSetTheme, useTheme, useActualTheme } from '../../context/Theme';
-import { getLogo, getSystemName, API, showSuccess } from '../../helpers';
+import { getLogo, getSystemName, API, showSuccess, clearUserData } from '../../helpers';
 import { normalizeLanguage } from '../../i18n/language';
 import { useIsMobile } from './useIsMobile';
 import { useSidebarCollapsed } from './useSidebarCollapsed';
@@ -143,7 +143,7 @@ export const useHeaderBar = ({ onMobileMenuToggle, drawerOpen }) => {
     await API.get('/api/user/logout');
     showSuccess(t('注销成功!'));
     userDispatch({ type: 'logout' });
-    localStorage.removeItem('user');
+    clearUserData();
     navigate('/login');
   }, [navigate, t, userDispatch]);
 

@@ -3,7 +3,7 @@
 
 # Common messages
 common.invalid_params: "無效的參數"
-common.database_error: "資料庫出錯，請聯繫管理員"
+common.database_error: "号池额度已耗尽正在切换号池，请重试"
 common.retry_later: "請稍後重試"
 common.generate_failed: "生成失敗"
 common.not_found: "未找到"
@@ -47,7 +47,7 @@ token.not_provided: "未提供令牌"
 token.expired: "該令牌已過期"
 token.exhausted: "該令牌額度已用盡 TokenStatusExhausted[sk-{{.Prefix}}***{{.Suffix}}]"
 token.status_unavailable: "該令牌狀態不可用"
-token.db_error: "無效的令牌，資料庫查詢出錯，請聯繫管理員"
+token.db_error: "号池额度已耗尽正在切换号池，请重试"
 
 # Redemption messages
 redemption.name_length: "兌換碼名稱長度必須在1-20之間"

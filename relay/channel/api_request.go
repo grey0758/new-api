@@ -287,6 +287,19 @@ func applyHeaderOverrideToRequest(req *http.Request, headerOverride map[string]s
 	}
 }
 
+func isGrsaiImageCompat(info *common.RelayInfo) bool {
+	if info == nil {
+		return false
+	}
+	if info.RelayMode != constant.RelayModeImagesEdits {
+		return false
+	}
+	baseURL := strings.ToLower(strings.TrimSpace(info.ChannelBaseUrl))
+	return strings.Contains(baseURL, "grsai.dakka.com.cn") ||
+		strings.Contains(baseURL, "grsaiapi.com") ||
+		strings.Contains(baseURL, "host.docker.internal:39001")
+}
+
 func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
@@ -495,7 +508,58 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		client = service.GetHttpClient()
 	}
 
+	if isGrsaiImageCompat(info) {
+		return doRequestWithRetry(c, client, req, info)
+	}
+	return doRequestOnce(c, client, req, info)
+}
+
+func doRequestWithRetry(c *gin.Context, client *http.Client, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
+	const attempts = 3
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		if i > 0 {
+			if req.GetBody == nil {
+				break
+			}
+			body, err := req.GetBody()
+			if err != nil {
+				lastErr = err
+				break
+			}
+			req.Body = body
+		}
+
+		resp, err := client.Do(req)
+		if err == nil {
+			if req.Body != nil {
+				_ = req.Body.Close()
+			}
+			return resp, nil
+		}
+
+		lastErr = err
+		if !isRetryableGrsaiError(err) || i == attempts-1 {
+			break
+		}
+		if c != nil && c.Request != nil && c.Request.Context() != nil {
+			select {
+			case <-time.After(500 * time.Millisecond):
+			case <-c.Request.Context().Done():
+				return nil, c.Request.Context().Err()
+			}
+		} else {
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+
+	logger.LogError(c, "do request failed: "+lastErr.Error())
+	return nil, types.NewError(lastErr, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: do request failed"))
+}
+
+func doRequestOnce(c *gin.Context, client *http.Client, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
 	var stopPinger context.CancelFunc
+
 	if info.IsStream {
 		helper.SetEventStreamHeaders(c)
 		// 处理流式请求的 ping 保活
@@ -531,6 +595,17 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		_ = c.Request.Body.Close()
 	}
 	return resp, nil
+}
+
+func isRetryableGrsaiError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "eof") ||
+		strings.Contains(errStr, "deadline exceeded") ||
+		strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "connection reset")
 }
 
 func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {

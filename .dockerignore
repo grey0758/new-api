@@ -7,4 +7,5 @@ Makefile
 docs
 .eslintcache
 .gocache
+.runtime
 /web/node_modules

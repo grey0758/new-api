@@ -46,6 +46,10 @@ func InitOptionMap() {
 	common.OptionMap["RegisterEnabled"] = strconv.FormatBool(common.RegisterEnabled)
 	common.OptionMap["AutomaticDisableChannelEnabled"] = strconv.FormatBool(common.AutomaticDisableChannelEnabled)
 	common.OptionMap["AutomaticEnableChannelEnabled"] = strconv.FormatBool(common.AutomaticEnableChannelEnabled)
+	common.OptionMap["AutomaticChannelCooldownEnabled"] = strconv.FormatBool(common.AutomaticChannelCooldownEnabled)
+	common.OptionMap["ChannelCooldownFailureThreshold"] = strconv.Itoa(common.ChannelCooldownFailureThreshold)
+	common.OptionMap["ChannelCooldownFailureWindowSeconds"] = strconv.Itoa(common.ChannelCooldownFailureWindowSeconds)
+	common.OptionMap["ChannelCooldownSeconds"] = strconv.Itoa(common.ChannelCooldownSeconds)
 	common.OptionMap["LogConsumeEnabled"] = strconv.FormatBool(common.LogConsumeEnabled)
 	common.OptionMap["DisplayInCurrencyEnabled"] = strconv.FormatBool(common.DisplayInCurrencyEnabled)
 	common.OptionMap["DisplayTokenStatEnabled"] = strconv.FormatBool(common.DisplayTokenStatEnabled)
@@ -118,6 +122,16 @@ func InitOptionMap() {
 	common.OptionMap["WaffoPancakeCurrency"] = setting.WaffoPancakeCurrency
 	common.OptionMap["WaffoPancakeUnitPrice"] = strconv.FormatFloat(setting.WaffoPancakeUnitPrice, 'f', -1, 64)
 	common.OptionMap["WaffoPancakeMinTopUp"] = strconv.Itoa(setting.WaffoPancakeMinTopUp)
+	common.OptionMap["WxDaEpayEnabled"] = strconv.FormatBool(setting.WxDaEpayEnabled)
+	common.OptionMap["WxDaEpayAddress"] = setting.WxDaEpayAddress
+	common.OptionMap["WxDaEpayPid"] = setting.WxDaEpayPid
+	common.OptionMap["WxDaEpaySignType"] = setting.WxDaEpaySignType
+	common.OptionMap["WxDaEpayMD5Key"] = setting.WxDaEpayMD5Key
+	common.OptionMap["WxDaEpayPlatformPublicKey"] = setting.WxDaEpayPlatformPublicKey
+	common.OptionMap["WxDaEpayMerchantPrivateKey"] = setting.WxDaEpayMerchantPrivateKey
+	common.OptionMap["WxDaEpaySubmitPath"] = setting.WxDaEpaySubmitPath
+	common.OptionMap["WxDaEpayAlipayEnabled"] = strconv.FormatBool(setting.WxDaEpayAlipayEnabled)
+	common.OptionMap["WxDaEpayWxpayEnabled"] = strconv.FormatBool(setting.WxDaEpayWxpayEnabled)
 	common.OptionMap["TopupGroupRatio"] = common.TopupGroupRatio2JSONString()
 	common.OptionMap["Chats"] = setting.Chats2JsonString()
 	common.OptionMap["AutoGroups"] = setting.AutoGroups2JsonString()
@@ -443,6 +457,26 @@ func updateOptionMap(key string, value string) (err error) {
 		setting.WaffoPancakeUnitPrice, _ = strconv.ParseFloat(value, 64)
 	case "WaffoPancakeMinTopUp":
 		setting.WaffoPancakeMinTopUp, _ = strconv.Atoi(value)
+	case "WxDaEpayEnabled":
+		setting.WxDaEpayEnabled = value == "true"
+	case "WxDaEpayAddress":
+		setting.WxDaEpayAddress = value
+	case "WxDaEpayPid":
+		setting.WxDaEpayPid = value
+	case "WxDaEpaySignType":
+		setting.WxDaEpaySignType = value
+	case "WxDaEpayMD5Key":
+		setting.WxDaEpayMD5Key = value
+	case "WxDaEpayPlatformPublicKey":
+		setting.WxDaEpayPlatformPublicKey = value
+	case "WxDaEpayMerchantPrivateKey":
+		setting.WxDaEpayMerchantPrivateKey = value
+	case "WxDaEpaySubmitPath":
+		setting.WxDaEpaySubmitPath = value
+	case "WxDaEpayAlipayEnabled":
+		setting.WxDaEpayAlipayEnabled = value == "true"
+	case "WxDaEpayWxpayEnabled":
+		setting.WxDaEpayWxpayEnabled = value == "true"
 	case "TopupGroupRatio":
 		err = common.UpdateTopupGroupRatioByJSONString(value)
 	case "GitHubClientId":
@@ -495,6 +529,14 @@ func updateOptionMap(key string, value string) (err error) {
 		err = setting.UpdateModelRequestRateLimitGroupByJSONString(value)
 	case "RetryTimes":
 		common.RetryTimes, _ = strconv.Atoi(value)
+	case "AutomaticChannelCooldownEnabled":
+		common.AutomaticChannelCooldownEnabled = value == "true"
+	case "ChannelCooldownFailureThreshold":
+		common.ChannelCooldownFailureThreshold, _ = strconv.Atoi(value)
+	case "ChannelCooldownFailureWindowSeconds":
+		common.ChannelCooldownFailureWindowSeconds, _ = strconv.Atoi(value)
+	case "ChannelCooldownSeconds":
+		common.ChannelCooldownSeconds, _ = strconv.Atoi(value)
 	case "DataExportInterval":
 		common.DataExportInterval, _ = strconv.Atoi(value)
 	case "DataExportDefaultTime":

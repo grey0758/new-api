@@ -1,6 +1,7 @@
 package dto
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -346,6 +347,226 @@ type ResponsesOutput struct {
 	CallId    string                   `json:"call_id,omitempty"`
 	Name      string                   `json:"name,omitempty"`
 	Arguments string                   `json:"arguments,omitempty"`
+}
+
+func (o *ResponsesOutput) UnmarshalJSON(data []byte) error {
+	type responsesOutputAlias ResponsesOutput
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	if arguments, ok := raw["arguments"]; ok {
+		normalized := normalizeResponsesOutputArguments(arguments)
+		encoded, err := json.Marshal(normalized)
+		if err != nil {
+			return err
+		}
+		raw["arguments"] = encoded
+
+		data, err = json.Marshal(raw)
+		if err != nil {
+			return err
+		}
+	}
+
+	return json.Unmarshal(data, (*responsesOutputAlias)(o))
+}
+
+func normalizeResponsesOutputArguments(raw json.RawMessage) string {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return ""
+	}
+
+	var value string
+	if err := json.Unmarshal(raw, &value); err == nil {
+		return value
+	}
+
+	var compacted bytes.Buffer
+	if err := json.Compact(&compacted, raw); err == nil {
+		return compacted.String()
+	}
+
+	return string(raw)
+}
+
+func NormalizeResponsesStreamArgumentsData(data string) string {
+	normalized, ok := normalizeResponsesStreamArgumentsRaw(json.RawMessage(data))
+	if !ok {
+		return data
+	}
+	return string(normalized)
+}
+
+func NormalizeResponsesRequestInputArguments(input json.RawMessage) json.RawMessage {
+	normalized, ok := normalizeResponsesRequestInputArgumentsRaw(input)
+	if !ok {
+		return input
+	}
+	return normalized
+}
+
+func normalizeResponsesRequestInputArgumentsRaw(data json.RawMessage) ([]byte, bool) {
+	var input []json.RawMessage
+	if err := json.Unmarshal(data, &input); err != nil {
+		return nil, false
+	}
+
+	changed := false
+	for i, item := range input {
+		normalized, ok := normalizeResponsesRequestInputItemArgumentsRaw(item)
+		if ok {
+			input[i] = normalized
+			changed = true
+		}
+	}
+	if !changed {
+		return nil, false
+	}
+
+	normalized, err := json.Marshal(input)
+	if err != nil {
+		return nil, false
+	}
+	return normalized, true
+}
+
+func normalizeResponsesRequestInputItemArgumentsRaw(data json.RawMessage) ([]byte, bool) {
+	var item map[string]json.RawMessage
+	if err := json.Unmarshal(data, &item); err != nil {
+		return nil, false
+	}
+
+	arguments, ok := item["arguments"]
+	if !ok {
+		return nil, false
+	}
+	if responsesRequestInputArgumentsShouldRemainString(item["type"]) {
+		return nil, false
+	}
+
+	rawArguments := bytes.TrimSpace(arguments)
+	var argumentsString string
+	if len(rawArguments) == 0 || bytes.Equal(rawArguments, []byte("null")) || json.Unmarshal(rawArguments, &argumentsString) != nil {
+		return nil, false
+	}
+
+	argumentsObject := json.RawMessage(bytes.TrimSpace([]byte(argumentsString)))
+	if len(argumentsObject) == 0 || argumentsObject[0] != '{' {
+		return nil, false
+	}
+	if !json.Valid(argumentsObject) {
+		return nil, false
+	}
+
+	item["arguments"] = argumentsObject
+	normalized, err := json.Marshal(item)
+	if err != nil {
+		return nil, false
+	}
+	return normalized, true
+}
+
+func responsesRequestInputArgumentsShouldRemainString(rawType json.RawMessage) bool {
+	var itemType string
+	if err := json.Unmarshal(rawType, &itemType); err != nil {
+		return false
+	}
+	switch itemType {
+	case "function_call", "mcp_call":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeResponsesStreamArgumentsRaw(data json.RawMessage) ([]byte, bool) {
+	var event map[string]json.RawMessage
+	if err := json.Unmarshal(data, &event); err != nil {
+		return nil, false
+	}
+
+	changed := false
+	if item, ok := event["item"]; ok {
+		if normalized, ok := normalizeResponsesOutputArgumentsRaw(item); ok {
+			event["item"] = normalized
+			changed = true
+		}
+	}
+
+	if responseRaw, ok := event["response"]; ok {
+		var response map[string]json.RawMessage
+		if err := json.Unmarshal(responseRaw, &response); err == nil {
+			if outputRaw, ok := response["output"]; ok {
+				var outputs []json.RawMessage
+				if err := json.Unmarshal(outputRaw, &outputs); err == nil {
+					outputChanged := false
+					for i, output := range outputs {
+						if normalized, ok := normalizeResponsesOutputArgumentsRaw(output); ok {
+							outputs[i] = normalized
+							outputChanged = true
+						}
+					}
+					if outputChanged {
+						if encoded, err := json.Marshal(outputs); err == nil {
+							response["output"] = encoded
+							if encodedResponse, err := json.Marshal(response); err == nil {
+								event["response"] = encodedResponse
+								changed = true
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if !changed {
+		return nil, false
+	}
+
+	normalized, err := json.Marshal(event)
+	if err != nil {
+		return nil, false
+	}
+	return normalized, true
+}
+
+func normalizeResponsesOutputArgumentsRaw(data json.RawMessage) ([]byte, bool) {
+	var output map[string]json.RawMessage
+	if err := json.Unmarshal(data, &output); err != nil {
+		return nil, false
+	}
+
+	arguments, ok := output["arguments"]
+	if !ok || responsesOutputArgumentsIsStringOrNull(arguments) {
+		return nil, false
+	}
+
+	encoded, err := json.Marshal(normalizeResponsesOutputArguments(arguments))
+	if err != nil {
+		return nil, false
+	}
+	output["arguments"] = encoded
+
+	normalized, err := json.Marshal(output)
+	if err != nil {
+		return nil, false
+	}
+	return normalized, true
+}
+
+func responsesOutputArgumentsIsStringOrNull(raw json.RawMessage) bool {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return true
+	}
+
+	var value string
+	return json.Unmarshal(raw, &value) == nil
 }
 
 type ResponsesOutputContent struct {

@@ -12,11 +12,12 @@ import (
 )
 
 type RetryParam struct {
-	Ctx          *gin.Context
-	TokenGroup   string
-	ModelName    string
-	Retry        *int
-	resetNextTry bool
+	Ctx                *gin.Context
+	TokenGroup         string
+	ModelName          string
+	Retry              *int
+	ExcludedChannelIds map[int]bool
+	resetNextTry       bool
 }
 
 func (p *RetryParam) GetRetry() int {
@@ -43,6 +44,26 @@ func (p *RetryParam) IncreaseRetry() {
 
 func (p *RetryParam) ResetRetryNextTry() {
 	p.resetNextTry = true
+}
+
+func (p *RetryParam) ResetSelectionCycle() {
+	p.SetRetry(0)
+	p.resetNextTry = false
+	p.ExcludedChannelIds = nil
+	if p.Ctx != nil && p.TokenGroup == "auto" {
+		common.SetContextKey(p.Ctx, constant.ContextKeyAutoGroupIndex, 0)
+		common.SetContextKey(p.Ctx, constant.ContextKeyAutoGroupRetryIndex, 0)
+	}
+}
+
+func (p *RetryParam) ExcludeChannel(channelId int) {
+	if channelId <= 0 {
+		return
+	}
+	if p.ExcludedChannelIds == nil {
+		p.ExcludedChannelIds = make(map[int]bool)
+	}
+	p.ExcludedChannelIds[channelId] = true
 }
 
 // CacheGetRandomSatisfiedChannel tries to get a random channel that satisfies the requirements.
@@ -115,7 +136,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, _ = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry)
+			channel, _ = getRandomSatisfiedChannelSkippingCooldown(param, autoGroup, priorityRetry)
 			if channel == nil {
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
@@ -153,10 +174,25 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			break
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry())
+		channel, err = getRandomSatisfiedChannelSkippingCooldown(param, param.TokenGroup, param.GetRetry())
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}
 	}
 	return channel, selectGroup, nil
+}
+
+func getRandomSatisfiedChannelSkippingCooldown(param *RetryParam, group string, retry int) (*model.Channel, error) {
+	for {
+		channel, err := model.GetRandomSatisfiedChannelExcluding(group, param.ModelName, retry, param.ExcludedChannelIds)
+		if err != nil || channel == nil {
+			return channel, err
+		}
+		if !IsChannelCoolingDown(channel.Id) {
+			return channel, nil
+		}
+		logger.LogDebug(param.Ctx, "Skipping cooling channel #%d for group %s, model %s", channel.Id, group, param.ModelName)
+		param.ExcludeChannel(channel.Id)
+		retry = 0
+	}
 }

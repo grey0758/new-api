@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 
 import {
   getUserIdFromLocalStorage,
+  clearUserData,
   showError,
   formatMessageForAPI,
   isValidMessage,
@@ -26,15 +27,34 @@ import {
 import axios from 'axios';
 import { MESSAGE_ROLES } from '../constants/playground.constants';
 
-export let API = axios.create({
-  baseURL: import.meta.env.VITE_REACT_APP_SERVER_URL
-    ? import.meta.env.VITE_REACT_APP_SERVER_URL
-    : '',
-  headers: {
-    'New-API-User': getUserIdFromLocalStorage(),
-    'Cache-Control': 'no-store',
-  },
-});
+function createApiInstance() {
+  const instance = axios.create({
+    baseURL: import.meta.env.VITE_REACT_APP_SERVER_URL
+      ? import.meta.env.VITE_REACT_APP_SERVER_URL
+      : '',
+    headers: {
+      'Cache-Control': 'no-store',
+    },
+  });
+
+  instance.interceptors.request.use((config) => {
+    if (config.headers && typeof config.headers.set === 'function') {
+      config.headers.set('New-API-User', String(getUserIdFromLocalStorage()));
+      config.headers.set('Cache-Control', 'no-store');
+    } else {
+      config.headers = {
+        ...(config.headers || {}),
+        'New-API-User': String(getUserIdFromLocalStorage()),
+        'Cache-Control': 'no-store',
+      };
+    }
+    return config;
+  });
+
+  return instance;
+}
+
+export let API = createApiInstance();
 
 
 function redirectToOAuthUrl(url, options = {}) {
@@ -78,33 +98,27 @@ function patchAPIInstance(instance) {
   };
 }
 
-patchAPIInstance(API);
-
-export function updateAPI() {
-  API = axios.create({
-    baseURL: import.meta.env.VITE_REACT_APP_SERVER_URL
-      ? import.meta.env.VITE_REACT_APP_SERVER_URL
-      : '',
-    headers: {
-      'New-API-User': getUserIdFromLocalStorage(),
-      'Cache-Control': 'no-store',
+function attachApiInterceptors(instance) {
+  patchAPIInstance(instance);
+  instance.interceptors.response.use(
+    (response) => response,
+    (error) => {
+      // 如果请求配置中显式要求跳过全局错误处理，则不弹出默认错误提示
+      if (error.config && error.config.skipErrorHandler) {
+        return Promise.reject(error);
+      }
+      showError(error);
+      return Promise.reject(error);
     },
-  });
-
-  patchAPIInstance(API);
+  );
 }
 
-API.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    // 如果请求配置中显式要求跳过全局错误处理，则不弹出默认错误提示
-    if (error.config && error.config.skipErrorHandler) {
-      return Promise.reject(error);
-    }
-    showError(error);
-    return Promise.reject(error);
-  },
-);
+attachApiInterceptors(API);
+
+export function updateAPI() {
+  API = createApiInstance();
+  attachApiInterceptors(API);
+}
 
 // playground
 
@@ -262,7 +276,7 @@ async function prepareOAuthState(options = {}) {
     try {
       await API.get('/api/user/logout', { skipErrorHandler: true });
     } catch (err) {}
-    localStorage.removeItem('user');
+    clearUserData();
     updateAPI();
   }
   return await getOAuthState();

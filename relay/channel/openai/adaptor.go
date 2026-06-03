@@ -2,6 +2,7 @@ package openai
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -37,6 +38,28 @@ import (
 type Adaptor struct {
 	ChannelType    int
 	ResponseFormat string
+}
+
+func isGrsaiImageCompat(info *relaycommon.RelayInfo) bool {
+	if info == nil {
+		return false
+	}
+	if info.RelayMode != relayconstant.RelayModeImagesEdits {
+		return false
+	}
+	baseURL := strings.ToLower(strings.TrimSpace(info.ChannelBaseUrl))
+	return strings.Contains(baseURL, "grsai.dakka.com.cn") ||
+		strings.Contains(baseURL, "grsaiapi.com") ||
+		strings.Contains(baseURL, "host.docker.internal:39001")
+}
+
+func shouldNormalizeResponsesRequestArguments(info *relaycommon.RelayInfo) bool {
+	if info == nil {
+		return false
+	}
+	baseURL := strings.ToLower(strings.TrimSpace(info.ChannelBaseUrl))
+	return strings.Contains(baseURL, "api.openai.com") ||
+		strings.Contains(baseURL, "988665.xyz")
 }
 
 // parseReasoningEffortFromModelSuffix 从模型名称中解析推理级别
@@ -177,6 +200,9 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		url = strings.Replace(url, "{model}", info.UpstreamModelName, -1)
 		return url, nil
 	default:
+		if isGrsaiImageCompat(info) {
+			return relaycommon.GetFullRequestURL(info.ChannelBaseUrl, "/v1/api/generate", info.ChannelType), nil
+		}
 		if (info.RelayFormat == types.RelayFormatClaude || info.RelayFormat == types.RelayFormatGemini) &&
 			info.RelayMode != relayconstant.RelayModeResponses &&
 			info.RelayMode != relayconstant.RelayModeResponsesCompact {
@@ -440,6 +466,9 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
 	switch info.RelayMode {
 	case relayconstant.RelayModeImagesEdits:
+		if isGrsaiImageCompat(info) {
+			return convertGrsaiImageEditRequest(c, request)
+		}
 
 		var requestBody bytes.Buffer
 		writer := multipart.NewWriter(&requestBody)
@@ -565,6 +594,111 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 	}
 }
 
+func convertGrsaiImageEditRequest(c *gin.Context, request dto.ImageRequest) (map[string]any, error) {
+	mf := c.Request.MultipartForm
+	if mf == nil {
+		if _, err := c.MultipartForm(); err != nil {
+			return nil, errors.New("failed to parse multipart form")
+		}
+		mf = c.Request.MultipartForm
+	}
+	if mf == nil {
+		return nil, errors.New("no multipart form data found")
+	}
+
+	body := make(map[string]any)
+	body["model"] = request.Model
+	body["prompt"] = request.Prompt
+	body["replyType"] = "json"
+	body["aspectRatio"] = grsaiAspectRatioFromImageSize(request.Size)
+
+	for key, values := range mf.Value {
+		if key == "" || key == "model" || key == "prompt" || key == "n" ||
+			key == "size" || key == "quality" || key == "response_format" || len(values) == 0 {
+			continue
+		}
+		if len(values) == 1 {
+			body[key] = values[0]
+		} else {
+			body[key] = values
+		}
+	}
+
+	imageFiles := collectMultipartImageFiles(mf)
+	if len(imageFiles) == 0 {
+		return nil, errors.New("image is required")
+	}
+	images := make([]string, 0, len(imageFiles))
+	for i, fileHeader := range imageFiles {
+		file, err := fileHeader.Open()
+		if err != nil {
+			return nil, fmt.Errorf("failed to open image file %d: %w", i, err)
+		}
+		data, err := io.ReadAll(file)
+		_ = file.Close()
+		if err != nil {
+			return nil, fmt.Errorf("failed to read image file %d: %w", i, err)
+		}
+		images = append(images, base64.StdEncoding.EncodeToString(data))
+	}
+	body["images"] = images
+
+	c.Request.Header.Set("Content-Type", "application/json")
+	return body, nil
+}
+
+func grsaiAspectRatioFromImageSize(size string) string {
+	size = strings.TrimSpace(size)
+	if size == "" {
+		return "1:1"
+	}
+
+	normalized := strings.ReplaceAll(size, "×", "x")
+	parts := strings.Split(normalized, "x")
+	if len(parts) != 2 {
+		if strings.Contains(size, ":") {
+			return size
+		}
+		return "1:1"
+	}
+
+	left := strings.TrimSpace(parts[0])
+	right := strings.TrimSpace(parts[1])
+	switch {
+	case left == right:
+		return "1:1"
+	case left == "1024" && right == "1536", left == "768" && right == "1152":
+		return "2:3"
+	case left == "1536" && right == "1024", left == "1152" && right == "768":
+		return "3:2"
+	case left == "1024" && right == "1792":
+		return "9:16"
+	case left == "1792" && right == "1024":
+		return "16:9"
+	default:
+		return fmt.Sprintf("%s:%s", left, right)
+	}
+}
+
+func collectMultipartImageFiles(mf *multipart.Form) []*multipart.FileHeader {
+	if mf == nil || mf.File == nil {
+		return nil
+	}
+	if imageFiles := mf.File["image"]; len(imageFiles) > 0 {
+		return imageFiles
+	}
+	if imageFiles := mf.File["image[]"]; len(imageFiles) > 0 {
+		return imageFiles
+	}
+	var imageFiles []*multipart.FileHeader
+	for fieldName, files := range mf.File {
+		if strings.HasPrefix(fieldName, "image[") && len(files) > 0 {
+			imageFiles = append(imageFiles, files...)
+		}
+	}
+	return imageFiles
+}
+
 // detectImageMimeType determines the MIME type based on the file extension
 func detectImageMimeType(filename string) string {
 	ext := strings.ToLower(filepath.Ext(filename))
@@ -601,6 +735,9 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	if info != nil && request.Reasoning != nil && request.Reasoning.Effort != "" {
 		info.ReasoningEffort = request.Reasoning.Effort
 	}
+	if shouldNormalizeResponsesRequestArguments(info) {
+		request.Input = dto.NormalizeResponsesRequestInputArguments(request.Input)
+	}
 	return request, nil
 }
 
@@ -627,7 +764,11 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	case relayconstant.RelayModeAudioTranscription:
 		err, usage = OpenaiSTTHandler(c, resp, info, a.ResponseFormat)
 	case relayconstant.RelayModeImagesGenerations, relayconstant.RelayModeImagesEdits:
-		usage, err = OpenaiHandlerWithUsage(c, info, resp)
+		if info.RelayMode == relayconstant.RelayModeImagesEdits && isGrsaiImageCompat(info) {
+			usage, err = GrsaiImageHandler(c, info, resp)
+		} else {
+			usage, err = OpenaiHandlerWithUsage(c, info, resp)
+		}
 	case relayconstant.RelayModeRerank:
 		usage, err = common_handler.RerankHandler(c, info, resp)
 	case relayconstant.RelayModeResponses:

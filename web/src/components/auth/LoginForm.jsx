@@ -40,7 +40,6 @@ import {
   buildAssertionResult,
   isPasskeySupported,
 } from '../../helpers';
-import Turnstile from 'react-turnstile';
 import {
   Button,
   Card,
@@ -85,9 +84,6 @@ const LoginForm = () => {
   const [submitted, setSubmitted] = useState(false);
   const [userState, userDispatch] = useContext(UserContext);
   const [statusState] = useContext(StatusContext);
-  const [turnstileEnabled, setTurnstileEnabled] = useState(false);
-  const [turnstileSiteKey, setTurnstileSiteKey] = useState('');
-  const [turnstileToken, setTurnstileToken] = useState('');
   const [showWeChatLoginModal, setShowWeChatLoginModal] = useState(false);
   const [showEmailLogin, setShowEmailLogin] = useState(false);
   const [wechatLoading, setWechatLoading] = useState(false);
@@ -144,11 +140,6 @@ const LoginForm = () => {
   );
 
   useEffect(() => {
-    if (status?.turnstile_check) {
-      setTurnstileEnabled(true);
-      setTurnstileSiteKey(status.turnstile_site_key);
-    }
-
     // 从 status 获取用户协议和隐私政策的启用状态
     setHasUserAgreement(status?.user_agreement_enabled || false);
     setHasPrivacyPolicy(status?.privacy_policy_enabled || false);
@@ -183,10 +174,6 @@ const LoginForm = () => {
   };
 
   const onSubmitWeChatVerificationCode = async () => {
-    if (turnstileEnabled && turnstileToken === '') {
-      showInfo('请稍后几秒重试，Turnstile 正在检查用户环境！');
-      return;
-    }
     setWechatCodeSubmitLoading(true);
     try {
       const res = await API.get(
@@ -220,21 +207,14 @@ const LoginForm = () => {
       showInfo(t('请先阅读并同意用户协议和隐私政策'));
       return;
     }
-    if (turnstileEnabled && turnstileToken === '') {
-      showInfo('请稍后几秒重试，Turnstile 正在检查用户环境！');
-      return;
-    }
     setSubmitted(true);
     setLoginLoading(true);
     try {
       if (username && password) {
-        const res = await API.post(
-          `/api/user/login?turnstile=${turnstileToken}`,
-          {
-            username,
-            password,
-          },
-        );
+        const res = await API.post('/api/user/login', {
+          username,
+          password,
+        });
         const { success, message, data } = res.data;
         if (success) {
           // 检查是否需要2FA验证
@@ -958,23 +938,11 @@ const LoginForm = () => {
         style={{ top: '50%', left: '-120px' }}
       />
       <div className='w-full max-w-sm mt-[60px]'>
-        {showEmailLogin ||
-        !hasOAuthLoginOptions
+        {showEmailLogin || !hasOAuthLoginOptions
           ? renderEmailLoginForm()
           : renderOAuthOptions()}
         {renderWeChatLoginModal()}
         {render2FAModal()}
-
-        {turnstileEnabled && (
-          <div className='flex justify-center mt-6'>
-            <Turnstile
-              sitekey={turnstileSiteKey}
-              onVerify={(token) => {
-                setTurnstileToken(token);
-              }}
-            />
-          </div>
-        )}
       </div>
     </div>
   );

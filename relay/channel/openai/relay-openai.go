@@ -592,6 +592,57 @@ func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 	return &usageResp.Usage, nil
 }
 
+type grsaiImageGenerateResponse struct {
+	Id      string `json:"id"`
+	Status  string `json:"status"`
+	Results []struct {
+		Url string `json:"url"`
+	} `json:"results"`
+}
+
+func GrsaiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+	defer service.CloseResponseBodyGracefully(resp)
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
+	}
+
+	var grsaiResp grsaiImageGenerateResponse
+	if err = common.Unmarshal(responseBody, &grsaiResp); err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+	}
+
+	if !strings.EqualFold(grsaiResp.Status, "succeeded") || len(grsaiResp.Results) == 0 {
+		return nil, types.NewOpenAIError(fmt.Errorf("grsai image request failed: status=%s", grsaiResp.Status), types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+	}
+
+	imageResp := dto.ImageResponse{
+		Created: common.GetTimestamp(),
+		Data:    make([]dto.ImageData, 0, len(grsaiResp.Results)),
+	}
+	for _, result := range grsaiResp.Results {
+		if strings.TrimSpace(result.Url) == "" {
+			continue
+		}
+		imageResp.Data = append(imageResp.Data, dto.ImageData{Url: result.Url})
+	}
+	if len(imageResp.Data) == 0 {
+		return nil, types.NewOpenAIError(fmt.Errorf("grsai image request returned no image urls"), types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+	}
+
+	openAIResponseBody, err := common.Marshal(imageResp)
+	if err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+	}
+	service.IOCopyBytesGracefully(c, resp, openAIResponseBody)
+
+	return &dto.Usage{
+		PromptTokens: 1,
+		TotalTokens:  1,
+	}, nil
+}
+
 func applyUsagePostProcessing(info *relaycommon.RelayInfo, usage *dto.Usage, responseBody []byte) {
 	if info == nil || usage == nil {
 		return

@@ -94,9 +94,13 @@ func SyncChannelCache(frequency int) {
 }
 
 func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel, error) {
+	return GetRandomSatisfiedChannelExcluding(group, model, retry, nil)
+}
+
+func GetRandomSatisfiedChannelExcluding(group string, model string, retry int, excludedChannelIds map[int]bool) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry)
+		return GetChannelExcluding(group, model, retry, excludedChannelIds)
 	}
 
 	channelSyncLock.RLock()
@@ -113,6 +117,10 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 
 	if len(channels) == 0 {
 		return nil, nil
+	}
+
+	if len(excludedChannelIds) > 0 {
+		return chooseBestAvailableCachedChannel(group, model, channels, excludedChannelIds)
 	}
 
 	if len(channels) == 1 {
@@ -187,6 +195,72 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 		}
 	}
 	// return null if no channel is not found
+	return nil, errors.New("channel not found")
+}
+
+func chooseBestAvailableCachedChannel(group string, model string, channels []int, excludedChannelIds map[int]bool) (*Channel, error) {
+	var targetChannels []*Channel
+	var targetPriority int64
+	hasPriority := false
+
+	for _, channelId := range channels {
+		if excludedChannelIds[channelId] {
+			continue
+		}
+		channel, ok := channelsIDM[channelId]
+		if !ok {
+			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
+		}
+		priority := channel.GetPriority()
+		if !hasPriority || priority > targetPriority {
+			targetPriority = priority
+			targetChannels = []*Channel{channel}
+			hasPriority = true
+			continue
+		}
+		if priority == targetPriority {
+			targetChannels = append(targetChannels, channel)
+		}
+	}
+
+	if len(targetChannels) == 0 {
+		return nil, errors.New(fmt.Sprintf("no untried channel found, group: %s, model: %s", group, model))
+	}
+
+	return chooseWeightedCachedChannel(targetChannels)
+}
+
+func chooseWeightedCachedChannel(targetChannels []*Channel) (*Channel, error) {
+	if len(targetChannels) == 0 {
+		return nil, errors.New("channel not found")
+	}
+	if len(targetChannels) == 1 {
+		return targetChannels[0], nil
+	}
+
+	var sumWeight = 0
+	for _, channel := range targetChannels {
+		sumWeight += channel.GetWeight()
+	}
+
+	smoothingFactor := 1
+	smoothingAdjustment := 0
+
+	if sumWeight == 0 {
+		sumWeight = len(targetChannels) * 100
+		smoothingAdjustment = 100
+	} else if sumWeight/len(targetChannels) < 10 {
+		smoothingFactor = 100
+	}
+
+	totalWeight := sumWeight * smoothingFactor
+	randomWeight := rand.Intn(totalWeight)
+	for _, channel := range targetChannels {
+		randomWeight -= channel.GetWeight()*smoothingFactor + smoothingAdjustment
+		if randomWeight < 0 {
+			return channel, nil
+		}
+	}
 	return nil, errors.New("channel not found")
 }
 
