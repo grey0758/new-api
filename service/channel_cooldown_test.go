@@ -199,6 +199,11 @@ func TestTransientRelayFailoverErrorIncludesQuotaAndCountryRegionHints(t *testin
 		types.ErrorCodeBadResponseStatusCode,
 		http.StatusGatewayTimeout,
 	)))
+	require.True(t, IsTransientRelayFailoverError(types.NewErrorWithStatusCode(
+		errors.New("responses stream closed before response.completed"),
+		types.ErrorCodeResponsesStreamIncomplete,
+		http.StatusServiceUnavailable,
+	)))
 	require.False(t, IsTransientRelayFailoverError(types.NewErrorWithStatusCode(
 		errors.New("invalid request body"),
 		types.ErrorCodeInvalidRequest,

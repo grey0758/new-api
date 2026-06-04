@@ -81,6 +81,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	var usage = &dto.Usage{}
 	var responseTextBuilder strings.Builder
+	completed := false
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 
@@ -91,12 +92,13 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			sr.Error(err)
 			return
 		}
-		sendResponsesStreamData(c, streamResponse, data)
+		sendResponsesStreamData(c, info, streamResponse, data)
 		if streamResponse.Response != nil && streamResponse.Response.ID != "" {
 			c.Set("relay_response_id", streamResponse.Response.ID)
 		}
 		switch streamResponse.Type {
 		case "response.completed":
+			completed = true
 			if streamResponse.Response != nil {
 				if streamResponse.Response.Usage != nil {
 					if streamResponse.Response.Usage.InputTokens != 0 {
@@ -135,6 +137,15 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 		}
 	})
+
+	if !completed {
+		err := fmt.Errorf("responses stream closed before response.completed: end=%s received=%d sent=%d", info.StreamStatus.Summary(), info.ReceivedResponseCount, info.SendResponseCount)
+		service.RecordResponsesStreamFailover(c, info.OriginModelName, info.ChannelId)
+		if info.SendResponseCount == 0 && c != nil && c.Writer != nil && !c.Writer.Written() {
+			return nil, types.NewOpenAIError(err, types.ErrorCodeResponsesStreamIncomplete, http.StatusServiceUnavailable)
+		}
+		logger.LogError(c, err.Error())
+	}
 
 	if usage.CompletionTokens == 0 {
 		// 计算输出文本的 token 数量

@@ -175,6 +175,9 @@ func IsTransientRelayFailoverError(err *types.NewAPIError) bool {
 	if err == nil || types.IsSkipRetryError(err) {
 		return false
 	}
+	if IsResponsesStreamIncompleteError(err) {
+		return true
+	}
 	if IsTransientCredentialCooldownError(err) || IsTransientAuthUnavailableError(err) || IsTransientProviderCooldownError(err) {
 		return true
 	}

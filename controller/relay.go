@@ -179,10 +179,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}()
 
 	retryParam := &service.RetryParam{
-		Ctx:        c,
-		TokenGroup: relayInfo.TokenGroup,
-		ModelName:  relayInfo.OriginModelName,
-		Retry:      common.GetPointer(0),
+		Ctx:                c,
+		TokenGroup:         relayInfo.TokenGroup,
+		ModelName:          relayInfo.OriginModelName,
+		Retry:              common.GetPointer(0),
+		ExcludedChannelIds: service.GetResponsesStreamFailoverExcludedChannels(c, relayInfo.OriginModelName),
 	}
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
@@ -227,6 +228,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 			if newAPIError == nil {
 				relayInfo.LastError = nil
+				if !service.HasResponsesStreamIncomplete(c) {
+					service.ClearResponsesStreamFailover(c, relayInfo.OriginModelName)
+				}
 				return
 			}
 
@@ -414,7 +418,9 @@ func shouldRetryRelayError(openaiErr *types.NewAPIError) bool {
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, err.Error()))
 	c.Set("relay_channel_error_seen", true)
-	service.RecordChannelFailureForCooldown(channelError, err)
+	if !service.IsResponsesStreamIncompleteError(err) {
+		service.RecordChannelFailureForCooldown(channelError, err)
+	}
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
 	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
 	if service.ShouldDisableChannel(err) && channelError.AutoBan {

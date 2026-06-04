@@ -102,7 +102,9 @@ func Distribute() func(c *gin.Context) {
 				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					if err == nil && preferred != nil {
-						if preferred.Status != common.ChannelStatusEnabled {
+						if service.ShouldSkipChannelForResponsesStreamFailover(c, modelRequest.Model, preferred.Id) {
+							channel = nil
+						} else if preferred.Status != common.ChannelStatusEnabled {
 							service.ClearCurrentChannelAffinity(c)
 						} else if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
@@ -133,10 +135,11 @@ func Distribute() func(c *gin.Context) {
 
 				if channel == nil {
 					channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
-						Ctx:        c,
-						ModelName:  modelRequest.Model,
-						TokenGroup: usingGroup,
-						Retry:      common.GetPointer(0),
+						Ctx:                c,
+						ModelName:          modelRequest.Model,
+						TokenGroup:         usingGroup,
+						Retry:              common.GetPointer(0),
+						ExcludedChannelIds: service.GetResponsesStreamFailoverExcludedChannels(c, modelRequest.Model),
 					})
 					if err != nil {
 						showGroup := usingGroup
@@ -162,7 +165,7 @@ func Distribute() func(c *gin.Context) {
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
 		SetupContextForSelectedChannel(c, channel, modelRequest.Model)
 		c.Next()
-		if channel != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest {
+		if channel != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest && !service.HasResponsesStreamIncomplete(c) {
 			service.RecordChannelAffinity(c, channel.Id)
 		}
 	}
