@@ -163,18 +163,27 @@ const TopUp = () => {
       });
       const { success, message, data } = res.data;
       if (success) {
+        const redemptionType = data?.type || 'balance';
+        const redeemedQuota =
+          typeof data === 'number' ? data : Number(data?.quota || 0);
         showSuccess(t('兑换成功！'));
         Modal.success({
           title: t('兑换成功！'),
-          content: t('成功兑换额度：') + renderQuota(data),
+          content:
+            redemptionType === 'subscription'
+              ? t('成功兑换订阅')
+              : t('成功兑换额度：') + renderQuota(redeemedQuota),
           centered: true,
         });
-        if (userState.user) {
+        if (userState.user && redeemedQuota > 0) {
           const updatedUser = {
             ...userState.user,
-            quota: userState.user.quota + data,
+            quota: userState.user.quota + redeemedQuota,
           };
           userDispatch({ type: 'login', payload: updatedUser });
+        }
+        if (redemptionType === 'subscription') {
+          getSubscriptionSelf().then();
         }
         setRedemptionCode('');
       } else {

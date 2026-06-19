@@ -118,6 +118,7 @@ const PricingSidebar = ({
         setFilterGroup={handleGroupClick}
         usableGroup={categoryProps.usableGroup}
         groupRatio={categoryProps.groupRatio}
+        displayGroupRatio={categoryProps.displayGroupRatio}
         models={groupCountModels}
         loading={loading}
         t={t}

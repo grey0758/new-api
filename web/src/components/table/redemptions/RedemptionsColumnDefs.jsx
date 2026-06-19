@@ -93,6 +93,21 @@ export const getRedemptionsColumns = ({
       dataIndex: 'id',
     },
     {
+      title: t('物品类型'),
+      dataIndex: 'type',
+      render: (text) => {
+        const label = text === 'subscription' ? t('订阅') : t('余额');
+        return (
+          <Tag
+            color={text === 'subscription' ? 'blue' : 'green'}
+            shape='circle'
+          >
+            {label}
+          </Tag>
+        );
+      },
+    },
+    {
       title: t('名称'),
       dataIndex: 'name',
     },
@@ -105,9 +120,21 @@ export const getRedemptionsColumns = ({
       },
     },
     {
-      title: t('额度'),
+      title: t('兑换内容'),
       dataIndex: 'quota',
-      render: (text) => {
+      render: (text, record) => {
+        if (record.type === 'subscription') {
+          return (
+            <div>
+              <Tag color='blue' shape='circle'>
+                {t('订阅套餐')}
+                {record.subscription_plan_id
+                  ? ` #${record.subscription_plan_id}`
+                  : ''}
+              </Tag>
+            </div>
+          );
+        }
         return (
           <div>
             <Tag color='grey' shape='circle'>

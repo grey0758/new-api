@@ -26,6 +26,7 @@ import SelectableButtonGroup from '../../../common/ui/SelectableButtonGroup';
  * @param {Function} setFilterGroup 设置选中分组
  * @param {Record<string, any>} usableGroup 后端返回的可用分组对象
  * @param {Record<string, number>} groupRatio 分组倍率对象
+ * @param {Record<string, number>} displayGroupRatio 展示用分组倍率对象
  * @param {Array} models 模型列表
  * @param {boolean} loading 是否加载中
  * @param {Function} t i18n
@@ -35,6 +36,7 @@ const PricingGroups = ({
   setFilterGroup,
   usableGroup = {},
   groupRatio = {},
+  displayGroupRatio = {},
   models = [],
   loading = false,
   t,
@@ -42,11 +44,15 @@ const PricingGroups = ({
   const groups = [
     'all',
     ...Object.keys(usableGroup).filter((key) => key !== ''),
+    ...Object.keys(displayGroupRatio).filter(
+      (key) => key !== '' && usableGroup[key] === undefined,
+    ),
   ];
 
   const items = groups.map((g) => {
+    const isDisplayGroup = displayGroupRatio[g] !== undefined;
     const modelCount =
-      g === 'all'
+      g === 'all' || isDisplayGroup
         ? models.length
         : models.filter((m) => m.enable_groups && m.enable_groups.includes(g))
             .length;
@@ -63,7 +69,12 @@ const PricingGroups = ({
     }
     return {
       value: g,
-      label: g === 'all' ? t('全部分组') : g,
+      label:
+        g === 'all'
+          ? t('全部分组')
+          : isDisplayGroup
+            ? `${g} (${t('仅展示')})`
+            : g,
       tagCount: ratioDisplay,
     };
   });

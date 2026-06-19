@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { lazy, Suspense, useContext, useMemo } from 'react';
-import { Route, Routes, useLocation, useParams } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import Loading from './components/common/ui/Loading';
 import User from './pages/User';
 import { AuthRedirect, PrivateRoute, AdminRoute } from './helpers';
@@ -34,6 +34,8 @@ import PasswordResetConfirm from './components/auth/PasswordResetConfirm';
 import Channel from './pages/Channel';
 import Token from './pages/Token';
 import Redemption from './pages/Redemption';
+import OpsRedemption from './pages/OpsRedemption';
+import OpsRedemptionDirect from './pages/OpsRedemptionDirect';
 import TopUp from './pages/TopUp';
 import Log from './pages/Log';
 import Chat from './pages/Chat';
@@ -162,6 +164,46 @@ function App() {
               <Redemption />
             </AdminRoute>
           }
+        />
+        <Route
+          path='/ops'
+          element={
+            <OpsRedemption />
+          }
+        />
+        <Route
+          path='/ops/direct'
+          element={
+            <OpsRedemptionDirect />
+          }
+        />
+        <Route
+          path='/newapi-ops'
+          element={
+            <OpsRedemption />
+          }
+        />
+        <Route
+          path='/newapi-ops/direct'
+          element={
+            <OpsRedemptionDirect />
+          }
+        />
+        <Route
+          path='/ops/redemption'
+          element={
+            <OpsRedemption />
+          }
+        />
+        <Route
+          path='/ops/redemption/direct'
+          element={
+            <OpsRedemptionDirect />
+          }
+        />
+        <Route
+          path='/ops/redemption-old'
+          element={<Navigate to='/ops' replace />}
         />
         <Route
           path='/console/user'

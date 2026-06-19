@@ -45,6 +45,7 @@ type channelAffinityMeta struct {
 	TTLSeconds     int
 	RuleName       string
 	SkipRetry      bool
+	CacheHit       bool
 	ParamTemplate  map[string]interface{}
 	KeySourceType  string
 	KeySourceKey   string
@@ -302,6 +303,11 @@ func extractChannelAffinityValue(c *gin.Context, src operation_setting.ChannelAf
 			return ""
 		}
 		return strings.TrimSpace(c.GetString(src.Key))
+	case "header":
+		if src.Key == "" || c == nil || c.Request == nil {
+			return ""
+		}
+		return strings.TrimSpace(c.Request.Header.Get(src.Key))
 	case "gjson":
 		if src.Path == "" {
 			return ""
@@ -566,52 +572,50 @@ func GetPreferredChannelByAffinity(c *gin.Context, modelName string, usingGroup 
 		if len(rule.UserAgentInclude) > 0 && !matchAnyIncludeFold(rule.UserAgentInclude, userAgent) {
 			continue
 		}
-		var affinityValue string
-		var usedSource operation_setting.ChannelAffinityKeySource
 		for _, src := range rule.KeySources {
-			affinityValue = extractChannelAffinityValue(c, src)
-			if affinityValue != "" {
-				usedSource = src
-				break
+			affinityValue := extractChannelAffinityValue(c, src)
+			if affinityValue == "" {
+				continue
 			}
-		}
-		if affinityValue == "" {
-			continue
-		}
-		if rule.ValueRegex != "" && !matchAnyRegexCached([]string{rule.ValueRegex}, affinityValue) {
-			continue
-		}
+			if rule.ValueRegex != "" && !matchAnyRegexCached([]string{rule.ValueRegex}, affinityValue) {
+				continue
+			}
 
-		ttlSeconds := rule.TTLSeconds
-		if ttlSeconds <= 0 {
-			ttlSeconds = setting.DefaultTTLSeconds
-		}
-		cacheKeySuffix := buildChannelAffinityCacheKeySuffix(rule, modelName, usingGroup, affinityValue)
-		cacheKeyFull := channelAffinityCacheNamespace + ":" + cacheKeySuffix
-		setChannelAffinityContext(c, channelAffinityMeta{
-			CacheKey:       cacheKeyFull,
-			TTLSeconds:     ttlSeconds,
-			RuleName:       rule.Name,
-			SkipRetry:      rule.SkipRetryOnFailure,
-			ParamTemplate:  cloneStringAnyMap(rule.ParamOverrideTemplate),
-			KeySourceType:  strings.TrimSpace(usedSource.Type),
-			KeySourceKey:   strings.TrimSpace(usedSource.Key),
-			KeySourcePath:  strings.TrimSpace(usedSource.Path),
-			KeyHint:        buildChannelAffinityKeyHint(affinityValue),
-			KeyFingerprint: affinityFingerprint(affinityValue),
-			UsingGroup:     usingGroup,
-			ModelName:      modelName,
-			RequestPath:    path,
-		})
+			ttlSeconds := rule.TTLSeconds
+			if ttlSeconds <= 0 {
+				ttlSeconds = setting.DefaultTTLSeconds
+			}
+			cacheKeySuffix := buildChannelAffinityCacheKeySuffix(rule, modelName, usingGroup, affinityValue)
+			cacheKeyFull := channelAffinityCacheNamespace + ":" + cacheKeySuffix
+			meta := channelAffinityMeta{
+				CacheKey:       cacheKeyFull,
+				TTLSeconds:     ttlSeconds,
+				RuleName:       rule.Name,
+				SkipRetry:      rule.SkipRetryOnFailure,
+				CacheHit:       false,
+				ParamTemplate:  cloneStringAnyMap(rule.ParamOverrideTemplate),
+				KeySourceType:  strings.TrimSpace(src.Type),
+				KeySourceKey:   strings.TrimSpace(src.Key),
+				KeySourcePath:  strings.TrimSpace(src.Path),
+				KeyHint:        buildChannelAffinityKeyHint(affinityValue),
+				KeyFingerprint: affinityFingerprint(affinityValue),
+				UsingGroup:     usingGroup,
+				ModelName:      modelName,
+				RequestPath:    path,
+			}
+			setChannelAffinityContext(c, meta)
 
-		cache := getChannelAffinityCache()
-		channelID, found, err := cache.Get(cacheKeySuffix)
-		if err != nil {
-			common.SysError(fmt.Sprintf("channel affinity cache get failed: key=%s, err=%v", cacheKeyFull, err))
-			return 0, false
-		}
-		if found {
-			return channelID, true
+			cache := getChannelAffinityCache()
+			channelID, found, err := cache.Get(cacheKeySuffix)
+			if err != nil {
+				common.SysError(fmt.Sprintf("channel affinity cache get failed: key=%s, err=%v", cacheKeyFull, err))
+				return 0, false
+			}
+			if found {
+				meta.CacheHit = true
+				setChannelAffinityContext(c, meta)
+				return channelID, true
+			}
 		}
 		return 0, false
 	}
@@ -633,7 +637,7 @@ func ShouldSkipRetryAfterChannelAffinityFailure(c *gin.Context) bool {
 	if !ok {
 		return false
 	}
-	return meta.SkipRetry
+	return meta.SkipRetry && meta.CacheHit
 }
 
 func ClearCurrentChannelAffinity(c *gin.Context) bool {
@@ -670,6 +674,7 @@ func MarkChannelAffinityUsed(c *gin.Context, selectedGroup string, channelID int
 		"model":          meta.ModelName,
 		"request_path":   meta.RequestPath,
 		"channel_id":     channelID,
+		"cache_hit":      meta.CacheHit,
 		"key_source":     meta.KeySourceType,
 		"key_key":        meta.KeySourceKey,
 		"key_path":       meta.KeySourcePath,
@@ -716,6 +721,45 @@ func RecordChannelAffinity(c *gin.Context, channelID int) {
 	cache := getChannelAffinityCache()
 	if err := cache.SetWithTTL(cacheKey, channelID, time.Duration(ttlSeconds)*time.Second); err != nil {
 		common.SysError(fmt.Sprintf("channel affinity cache set failed: key=%s, err=%v", cacheKey, err))
+	}
+	recordResponseIDChannelAffinity(c, setting, channelID, time.Duration(ttlSeconds)*time.Second)
+}
+
+func recordResponseIDChannelAffinity(c *gin.Context, setting *operation_setting.ChannelAffinitySetting, channelID int, ttl time.Duration) {
+	if c == nil || setting == nil || channelID <= 0 {
+		return
+	}
+	responseID := strings.TrimSpace(c.GetString("relay_response_id"))
+	if responseID == "" {
+		return
+	}
+	meta, ok := getChannelAffinityMeta(c)
+	if !ok {
+		return
+	}
+	if !strings.HasPrefix(meta.RequestPath, "/v1/responses") {
+		return
+	}
+
+	var matchedRule *operation_setting.ChannelAffinityRule
+	for i := range setting.Rules {
+		rule := &setting.Rules[i]
+		if strings.TrimSpace(rule.Name) == strings.TrimSpace(meta.RuleName) {
+			matchedRule = rule
+			break
+		}
+	}
+	if matchedRule == nil {
+		return
+	}
+
+	cacheKeySuffix := buildChannelAffinityCacheKeySuffix(*matchedRule, meta.ModelName, meta.UsingGroup, responseID)
+	if cacheKeySuffix == "" || cacheKeySuffix == meta.CacheKey {
+		return
+	}
+	cache := getChannelAffinityCache()
+	if err := cache.SetWithTTL(cacheKeySuffix, channelID, ttl); err != nil {
+		common.SysError(fmt.Sprintf("channel affinity response id cache set failed: key=%s, err=%v", cache.FullKey(cacheKeySuffix), err))
 	}
 }
 

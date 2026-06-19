@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
@@ -144,11 +145,25 @@ func TestShouldSkipRetryAfterChannelAffinityFailure(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "fallback to matched rule meta",
+			name: "matched rule meta without cache hit does not skip retry",
 			ctx: func() *gin.Context {
 				return buildChannelAffinityTemplateContextForTest(channelAffinityMeta{
 					RuleName:   "rule-skip-retry",
 					SkipRetry:  true,
+					CacheHit:   false,
+					UsingGroup: "default",
+					ModelName:  "gpt-5",
+				})
+			},
+			want: false,
+		},
+		{
+			name: "matched cache hit falls back to rule meta",
+			ctx: func() *gin.Context {
+				return buildChannelAffinityTemplateContextForTest(channelAffinityMeta{
+					RuleName:   "rule-skip-retry-hit",
+					SkipRetry:  true,
+					CacheHit:   true,
 					UsingGroup: "default",
 					ModelName:  "gpt-5",
 				})
@@ -244,4 +259,84 @@ func TestChannelAffinityHitCodexTemplatePassHeadersEffective(t *testing.T) {
 	require.False(t, exists)
 	_, exists = info.RuntimeHeadersOverride["x-codex-turn-metadata"]
 	require.False(t, exists)
+}
+
+func TestChannelAffinityRecordsResponsesIDForPreviousResponseID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalRedisEnabled := common.RedisEnabled
+	t.Cleanup(func() {
+		common.RedisEnabled = originalRedisEnabled
+		_ = getChannelAffinityCache().Purge()
+	})
+	common.RedisEnabled = false
+
+	cache := getChannelAffinityCache()
+	require.NoError(t, cache.Purge())
+
+	rootResponseID := fmt.Sprintf("resp-root-%d", time.Now().UnixNano())
+	promptCacheKey := fmt.Sprintf("pc-root-%d", time.Now().UnixNano())
+
+	firstCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	firstCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(fmt.Sprintf(`{"model":"gpt-5","prompt_cache_key":"%s"}`, promptCacheKey)))
+	firstCtx.Request.Header.Set("Content-Type", "application/json")
+
+	_, found := GetPreferredChannelByAffinity(firstCtx, "gpt-5", "pro")
+	require.False(t, found)
+	require.False(t, ShouldSkipRetryAfterChannelAffinityFailure(firstCtx))
+
+	firstCtx.Set("relay_response_id", rootResponseID)
+	RecordChannelAffinity(firstCtx, 9527)
+
+	followupCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	followupCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(fmt.Sprintf(`{"model":"gpt-5","previous_response_id":"%s"}`, rootResponseID)))
+	followupCtx.Request.Header.Set("Content-Type", "application/json")
+
+	channelID, found := GetPreferredChannelByAffinity(followupCtx, "gpt-5", "pro")
+	require.True(t, found)
+	require.Equal(t, 9527, channelID)
+	require.True(t, ShouldSkipRetryAfterChannelAffinityFailure(followupCtx))
+
+	meta, ok := getChannelAffinityMeta(followupCtx)
+	require.True(t, ok)
+	require.True(t, meta.CacheHit)
+	require.Equal(t, "previous_response_id", meta.KeySourcePath)
+}
+
+func TestChannelAffinityFallsThroughPreviousResponseIDMissToPromptCacheKey(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalRedisEnabled := common.RedisEnabled
+	t.Cleanup(func() {
+		common.RedisEnabled = originalRedisEnabled
+		_ = getChannelAffinityCache().Purge()
+	})
+	common.RedisEnabled = false
+
+	setting := operation_setting.GetChannelAffinitySetting()
+	var codexRule *operation_setting.ChannelAffinityRule
+	for i := range setting.Rules {
+		rule := &setting.Rules[i]
+		if strings.EqualFold(strings.TrimSpace(rule.Name), "codex cli trace") {
+			codexRule = rule
+			break
+		}
+	}
+	require.NotNil(t, codexRule)
+
+	promptCacheKey := fmt.Sprintf("pc-fallback-%d", time.Now().UnixNano())
+	cacheKeySuffix := buildChannelAffinityCacheKeySuffix(*codexRule, "gpt-5", "pro", promptCacheKey)
+	cache := getChannelAffinityCache()
+	require.NoError(t, cache.SetWithTTL(cacheKeySuffix, 9528, time.Minute))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(fmt.Sprintf(`{"model":"gpt-5","previous_response_id":"missing-response","prompt_cache_key":"%s"}`, promptCacheKey)))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	channelID, found := GetPreferredChannelByAffinity(ctx, "gpt-5", "pro")
+	require.True(t, found)
+	require.Equal(t, 9528, channelID)
+
+	meta, ok := getChannelAffinityMeta(ctx)
+	require.True(t, ok)
+	require.True(t, meta.CacheHit)
+	require.Equal(t, "prompt_cache_key", meta.KeySourcePath)
 }

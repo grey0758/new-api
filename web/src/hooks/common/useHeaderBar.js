@@ -50,6 +50,7 @@ export const useHeaderBar = ({ onMobileMenuToggle, drawerOpen }) => {
 
   const isSelfUseMode = statusState?.status?.self_use_mode_enabled || false;
   const docsLink = statusState?.status?.docs_link || '';
+  const installLink = statusState?.status?.install_link || '/install/';
   const isDemoSiteMode = statusState?.status?.demo_site_enabled || false;
 
   // 获取顶栏模块配置
@@ -68,6 +69,17 @@ export const useHeaderBar = ({ onMobileMenuToggle, drawerOpen }) => {
             requireAuth: false, // 默认不需要登录鉴权
           };
         }
+        if (modules.install === true) {
+          modules.install = {
+            enabled: true,
+            link: installLink,
+          };
+        } else if (typeof modules.install === 'object' && modules.install !== null) {
+          modules.install = {
+            ...modules.install,
+            link: modules.install.link || installLink,
+          };
+        }
 
         return modules;
       } catch (error) {
@@ -76,7 +88,7 @@ export const useHeaderBar = ({ onMobileMenuToggle, drawerOpen }) => {
       }
     }
     return null;
-  }, [headerNavModulesConfig]);
+  }, [headerNavModulesConfig, installLink]);
 
   // 获取模型广场权限配置
   const pricingRequireAuth = useMemo(() => {

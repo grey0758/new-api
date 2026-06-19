@@ -63,6 +63,42 @@ func TestIsChannelCoolingDownLocalExpires(t *testing.T) {
 	require.False(t, IsChannelCoolingDown(11))
 }
 
+func TestClearChannelCooldownRemovesProbeRequiredEntry(t *testing.T) {
+	originalEnabled := common.AutomaticChannelCooldownEnabled
+	originalProbeEnabled := common.ChannelCooldownProbeEnabled
+	originalRedisEnabled := common.RedisEnabled
+	t.Cleanup(func() {
+		common.AutomaticChannelCooldownEnabled = originalEnabled
+		common.ChannelCooldownProbeEnabled = originalProbeEnabled
+		common.RedisEnabled = originalRedisEnabled
+		channelCooldownMu.Lock()
+		channelCooldownLocal = map[int]channelCooldownEntry{}
+		channelCooldownMu.Unlock()
+	})
+
+	common.AutomaticChannelCooldownEnabled = true
+	common.ChannelCooldownProbeEnabled = true
+	common.RedisEnabled = false
+	channelCooldownMu.Lock()
+	channelCooldownLocal[12] = channelCooldownEntry{
+		coolUntil:     time.Now().Add(time.Hour),
+		probeRequired: true,
+		nextProbeAt:   time.Now(),
+	}
+	channelCooldownMu.Unlock()
+
+	require.True(t, IsChannelCoolingDown(12))
+	ClearChannelCooldown(12)
+	require.False(t, IsChannelCoolingDown(12))
+}
+
+func TestCooldownProbeChunkHasContent(t *testing.T) {
+	require.False(t, cooldownProbeChunkHasContent([]byte(`{"choices":[{"delta":{"role":"assistant"}}]}`)))
+	require.True(t, cooldownProbeChunkHasContent([]byte(`{"choices":[{"delta":{"content":"你好"}}]}`)))
+	require.True(t, cooldownProbeChunkHasContent([]byte(`{"type":"response.output_text.delta","delta":"你"}`)))
+	require.False(t, cooldownProbeChunkHasContent([]byte(`{"error":{"message":"bad"}}`)))
+}
+
 func TestTransientCredentialCooldownDoesNotTriggerChannelCooldown(t *testing.T) {
 	originalEnabled := common.AutomaticChannelCooldownEnabled
 	originalRedisEnabled := common.RedisEnabled
@@ -170,6 +206,11 @@ func TestTransientProviderCooldownDoesNotTriggerChannelCooldown(t *testing.T) {
 
 func TestTransientRelayFailoverErrorIncludesQuotaAndCountryRegionHints(t *testing.T) {
 	require.True(t, IsTransientRelayFailoverError(types.NewErrorWithStatusCode(
+		errors.New("Selected model is at capacity. Please try a different model."),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusBadRequest,
+	)))
+	require.True(t, IsTransientRelayFailoverError(types.NewErrorWithStatusCode(
 		errors.New("400 Bad Request: 号池额度已耗尽正在切换号池，请重试"),
 		types.ErrorCodeBadResponseStatusCode,
 		http.StatusBadRequest,
@@ -204,10 +245,64 @@ func TestTransientRelayFailoverErrorIncludesQuotaAndCountryRegionHints(t *testin
 		types.ErrorCodeResponsesStreamIncomplete,
 		http.StatusServiceUnavailable,
 	)))
+	require.True(t, IsTransientRelayFailoverError(types.NewErrorWithStatusCode(
+		errors.New("model too slow, please try again later"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusBadRequest,
+	)))
+	require.True(t, IsTransientRelayFailoverError(types.NewErrorWithStatusCode(
+		errors.New("Upstream request failed"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusBadRequest,
+	)))
+	require.True(t, IsTransientRelayFailoverError(types.NewErrorWithStatusCode(
+		errors.New("upstream returned error"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusBadRequest,
+	)))
+	require.True(t, IsTransientRelayFailoverError(types.NewErrorWithStatusCode(
+		errors.New("Service temporarily unavailable"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusBadRequest,
+	)))
 	require.False(t, IsTransientRelayFailoverError(types.NewErrorWithStatusCode(
 		errors.New("invalid request body"),
 		types.ErrorCodeInvalidRequest,
 		http.StatusBadRequest,
 		types.ErrOptionWithSkipRetry(),
 	)))
+}
+
+func TestTransientSlowUpstreamBadRequestTriggersChannelCooldown(t *testing.T) {
+	originalEnabled := common.AutomaticChannelCooldownEnabled
+	originalRedisEnabled := common.RedisEnabled
+	originalThreshold := common.ChannelCooldownFailureThreshold
+	originalWindow := common.ChannelCooldownFailureWindowSeconds
+	originalCooldown := common.ChannelCooldownSeconds
+	t.Cleanup(func() {
+		common.AutomaticChannelCooldownEnabled = originalEnabled
+		common.RedisEnabled = originalRedisEnabled
+		common.ChannelCooldownFailureThreshold = originalThreshold
+		common.ChannelCooldownFailureWindowSeconds = originalWindow
+		common.ChannelCooldownSeconds = originalCooldown
+		channelCooldownMu.Lock()
+		channelCooldownLocal = map[int]channelCooldownEntry{}
+		channelCooldownMu.Unlock()
+	})
+
+	common.AutomaticChannelCooldownEnabled = true
+	common.RedisEnabled = false
+	common.ChannelCooldownFailureThreshold = 1
+	common.ChannelCooldownFailureWindowSeconds = 60
+	common.ChannelCooldownSeconds = 60
+
+	channelError := *types.NewChannelError(32, 1, "slow-upstream", false, "", true)
+	upstreamErr := types.NewErrorWithStatusCode(
+		errors.New("model too slow, please try again later"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusBadRequest,
+	)
+
+	RecordChannelFailureForCooldown(channelError, upstreamErr)
+	require.True(t, IsChannelCoolingDown(32))
 }

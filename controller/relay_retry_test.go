@@ -155,6 +155,36 @@ func TestRelayStartsSecondSelectionCycleForTransientUpstreamError(t *testing.T) 
 	require.False(t, shouldStartNextRelayChannelSelectionCycle(c, info, err, 1))
 }
 
+func TestRelaySecondSelectionCycleKeepsFailedChannelExcluded(t *testing.T) {
+	retryParam := &service.RetryParam{}
+	retryParam.ExcludeChannel(38)
+
+	retryParam.ResetSelectionCycle()
+
+	require.True(t, retryParam.ExcludedChannelIds[38])
+}
+
+func TestRelayExcludesFailedChannelBeforeSecondSelectionCycle(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	err := types.NewErrorWithStatusCode(
+		errors.New("Service temporarily unavailable"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusServiceUnavailable,
+	)
+	info := &relaycommon.RelayInfo{
+		LastError:   err,
+		ChannelMeta: &relaycommon.ChannelMeta{},
+	}
+	retryParam := &service.RetryParam{}
+
+	require.True(t, shouldStartNextRelayChannelSelectionCycle(c, info, err, 0))
+	retryParam.ExcludeChannel(38)
+	retryParam.ResetSelectionCycle()
+
+	require.True(t, retryParam.ExcludedChannelIds[38])
+}
+
 func TestRelayDoesNotStartSecondSelectionCycleForClientErrorOrSpecificChannel(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())

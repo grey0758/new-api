@@ -3,7 +3,7 @@ package operation_setting
 import "github.com/QuantumNous/new-api/setting/config"
 
 type ChannelAffinityKeySource struct {
-	Type string `json:"type"` // context_int, context_string, gjson
+	Type string `json:"type"` // context_int, context_string, gjson, header
 	Key  string `json:"key,omitempty"`
 	Path string `json:"path,omitempty"`
 }
@@ -84,10 +84,12 @@ var channelAffinitySetting = ChannelAffinitySetting{
 			ModelRegex: []string{"^gpt-.*$"},
 			PathRegex:  []string{"/v1/responses"},
 			KeySources: []ChannelAffinityKeySource{
+				{Type: "gjson", Path: "previous_response_id"},
 				{Type: "gjson", Path: "prompt_cache_key"},
+				{Type: "header", Key: "Session_id"},
 			},
 			ValueRegex:            "",
-			TTLSeconds:            0,
+			TTLSeconds:            7 * 24 * 3600,
 			ParamOverrideTemplate: buildPassHeaderTemplate(codexCliPassThroughHeaders),
 			SkipRetryOnFailure:    true,
 			IncludeUsingGroup:     true,

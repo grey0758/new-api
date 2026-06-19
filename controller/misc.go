@@ -47,6 +47,11 @@ func GetStatus(c *gin.Context) {
 
 	passkeySetting := system_setting.GetPasskeySettings()
 	legalSetting := system_setting.GetLegalSettings()
+	baseURL := strings.TrimRight(system_setting.ServerAddress, "/")
+	installLink := strings.TrimSpace(operation_setting.GetGeneralSetting().InstallLink)
+	if installLink == "" && baseURL != "" {
+		installLink = baseURL + "/install/"
+	}
 
 	data := gin.H{
 		"version":                     common.Version,
@@ -71,6 +76,7 @@ func GetStatus(c *gin.Context) {
 		"turnstile_site_key":          common.TurnstileSiteKey,
 		"top_up_link":                 common.TopUpLink,
 		"docs_link":                   operation_setting.GetGeneralSetting().DocsLink,
+		"install_link":                installLink,
 		"quota_per_unit":              common.QuotaPerUnit,
 		// 兼容旧前端：保留 display_in_currency，同时提供新的 quota_display_type
 		"display_in_currency":           operation_setting.IsCurrencyDisplay(),

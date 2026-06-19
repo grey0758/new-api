@@ -124,21 +124,25 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
+	needSecurityPromptCapture := service.PromptViolationCaptureEnabled()
 	needCountToken := constant.CountToken
 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
 	var meta *types.TokenCountMeta
-	if needSensitiveCheck || needCountToken {
+	if needSensitiveCheck || needSecurityPromptCapture || needCountToken {
 		meta = request.GetTokenCountMeta()
 	} else {
 		meta = fastTokenCountMetaForPricing(request)
 	}
 
+	if needSecurityPromptCapture && meta != nil {
+		service.RecordPromptViolationIfDetected(c, relayInfo.OriginModelName, meta.CombineText)
+	}
+
 	if needSensitiveCheck && meta != nil {
 		contains, words := service.CheckSensitiveText(meta.CombineText)
 		if contains {
-			logger.LogWarn(c, fmt.Sprintf("user sensitive words detected: %s", strings.Join(words, ", ")))
-			newAPIError = types.NewError(err, types.ErrorCodeSensitiveWordsDetected)
-			return
+			logger.LogWarn(c, fmt.Sprintf("user sensitive words detected, record only: %s", strings.Join(words, ", ")))
+			service.RecordLocalSensitiveWordsIfDetected(c, relayInfo.OriginModelName, words)
 		}
 	}
 
@@ -240,6 +244,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 
 			if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry(), channel.Id) {
+				if shouldStartNextRelayChannelSelectionCycle(c, relayInfo, newAPIError, cycle) {
+					retryParam.ExcludeChannel(channel.Id)
+				}
 				break
 			}
 			retryParam.ExcludeChannel(channel.Id)
@@ -417,9 +424,10 @@ func shouldRetryRelayError(openaiErr *types.NewAPIError) bool {
 
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, err.Error()))
+	service.RecordUpstream400ViolationCandidate(c, channelError, err)
 	c.Set("relay_channel_error_seen", true)
 	if !service.IsResponsesStreamIncompleteError(err) {
-		service.RecordChannelFailureForCooldown(channelError, err)
+		service.RecordChannelFailureForCooldownWithModel(channelError, err, c.GetString("original_model"))
 	}
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
 	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
@@ -456,6 +464,7 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		}
 		service.AppendChannelAffinityAdminInfo(c, adminInfo)
 		other["admin_info"] = adminInfo
+		other = service.AppendSecurityAuditToOther(c, other)
 		startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
 		if startTime.IsZero() {
 			startTime = time.Now()

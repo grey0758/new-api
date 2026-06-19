@@ -20,11 +20,15 @@ import (
 const (
 	responsesStreamFailoverNamespace = "new-api:responses_stream_failover:v1"
 	responsesStreamFailoverTTL       = 5 * time.Minute
+	responsesStreamGuardNamespace    = "new-api:responses_stream_guard:v1"
+	responsesStreamGuardTTL          = 24 * time.Hour
 )
 
 var (
 	responsesStreamFailoverOnce  sync.Once
 	responsesStreamFailoverCache *cachex.HybridCache[map[int]bool]
+	responsesStreamGuardOnce     sync.Once
+	responsesStreamGuardCache    *cachex.HybridCache[bool]
 )
 
 func getResponsesStreamFailoverCache() *cachex.HybridCache[map[int]bool] {
@@ -42,6 +46,21 @@ func getResponsesStreamFailoverCache() *cachex.HybridCache[map[int]bool] {
 	return responsesStreamFailoverCache
 }
 
+func getResponsesStreamGuardCache() *cachex.HybridCache[bool] {
+	responsesStreamGuardOnce.Do(func() {
+		responsesStreamGuardCache = cachex.NewHybridCache[bool](cachex.HybridCacheConfig[bool]{
+			Namespace:    cachex.Namespace(responsesStreamGuardNamespace),
+			Redis:        common.RDB,
+			RedisEnabled: func() bool { return common.RedisEnabled },
+			RedisCodec:   cachex.JSONCodec[bool]{},
+			Memory: func() *hot.HotCache[string, bool] {
+				return hot.NewHotCache[string, bool](hot.LRU, 4096).Build()
+			},
+		})
+	})
+	return responsesStreamGuardCache
+}
+
 func IsResponsesStreamIncompleteError(err *types.NewAPIError) bool {
 	if err == nil {
 		return false
@@ -49,18 +68,23 @@ func IsResponsesStreamIncompleteError(err *types.NewAPIError) bool {
 	return err.GetErrorCode() == types.ErrorCodeResponsesStreamIncomplete
 }
 
-func ResponsesStreamFailoverKeyFromContext(c *gin.Context, modelName string) string {
+func isResponsesStreamRequestContext(c *gin.Context) (string, bool) {
 	if c == nil || c.Request == nil {
-		return ""
+		return "", false
 	}
 	if c.Request.Method != http.MethodPost {
-		return ""
+		return "", false
 	}
 	path := ""
 	if c.Request.URL != nil {
 		path = c.Request.URL.Path
 	}
-	if path != "/v1/responses" {
+	return path, path == "/v1/responses"
+}
+
+func ResponsesStreamFailoverKeyFromContext(c *gin.Context, modelName string) string {
+	path, ok := isResponsesStreamRequestContext(c)
+	if !ok {
 		return ""
 	}
 	storage, err := common.GetBodyStorage(c)
@@ -77,6 +101,50 @@ func ResponsesStreamFailoverKeyFromContext(c *gin.Context, modelName string) str
 	userID := c.GetInt("id")
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%d:%d:%s:%s:%s", userID, tokenID, modelName, path, string(body))))
 	return hex.EncodeToString(sum[:])
+}
+
+func ResponsesStreamGuardKeyFromContext(c *gin.Context, modelName string) string {
+	path, ok := isResponsesStreamRequestContext(c)
+	if !ok {
+		return ""
+	}
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
+		return ""
+	}
+	tokenID := c.GetInt("token_id")
+	userID := c.GetInt("id")
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d:%d:%s:%s", userID, tokenID, modelName, path)))
+	return hex.EncodeToString(sum[:])
+}
+
+func ShouldGuardResponsesStream(c *gin.Context, modelName string) bool {
+	key := ResponsesStreamGuardKeyFromContext(c, modelName)
+	if key == "" {
+		return false
+	}
+	guard, found, err := getResponsesStreamGuardCache().Get(key)
+	if err != nil {
+		common.SysError(fmt.Sprintf("responses stream guard cache get failed: key=%s err=%v", key, err))
+		return false
+	}
+	if found && guard {
+		c.Set("responses_stream_guard_key", key)
+		return true
+	}
+	return false
+}
+
+func RecordResponsesStreamGuard(c *gin.Context, modelName string) {
+	key := ResponsesStreamGuardKeyFromContext(c, modelName)
+	if key == "" {
+		return
+	}
+	if err := getResponsesStreamGuardCache().SetWithTTL(key, true, responsesStreamGuardTTL); err != nil {
+		common.SysError(fmt.Sprintf("responses stream guard cache set failed: key=%s err=%v", key, err))
+		return
+	}
+	c.Set("responses_stream_guard_key", key)
 }
 
 func GetResponsesStreamFailoverExcludedChannels(c *gin.Context, modelName string) map[int]bool {

@@ -14,7 +14,7 @@ var StartTime = time.Now().Unix() // unit: second
 var Version = "v0.0.0"            // this hard coding will be replaced automatically when building, no need to manually change
 var SystemName = "New API"
 var Footer = ""
-var Logo = ""
+var Logo = "/logo.png"
 var TopUpLink = ""
 
 // var ChatLink = ""
@@ -111,6 +111,9 @@ var AutomaticChannelCooldownEnabled = true
 var ChannelCooldownFailureThreshold = 3
 var ChannelCooldownFailureWindowSeconds = 120
 var ChannelCooldownSeconds = 300
+var ChannelCooldownProbeEnabled = true
+var ChannelCooldownProbeIntervalSeconds = 60
+var ChannelCooldownProbeTimeoutSeconds = 90
 var QuotaRemindThreshold = 1000
 var PreConsumedQuota = 500
 

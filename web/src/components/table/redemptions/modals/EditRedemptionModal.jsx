@@ -45,7 +45,6 @@ import {
   Avatar,
   Row,
   Col,
-  InputNumber,
 } from '@douyinfe/semi-ui';
 import {
   IconCreditCard,
@@ -56,6 +55,8 @@ import {
 
 const { Text, Title } = Typography;
 
+const getPlan = (item) => item?.plan || item;
+
 const EditRedemptionModal = (props) => {
   const { t } = useTranslation();
   const isEdit = props.editingRedemption.id !== undefined;
@@ -63,6 +64,8 @@ const EditRedemptionModal = (props) => {
   const isMobile = useIsMobile();
   const formApiRef = useRef(null);
   const [showQuotaInput, setShowQuotaInput] = useState(false);
+  const [subscriptionPlans, setSubscriptionPlans] = useState([]);
+  const [redemptionType, setRedemptionType] = useState('balance');
 
   const getInitValues = () => ({
     name: '',
@@ -70,6 +73,8 @@ const EditRedemptionModal = (props) => {
     amount: Number(quotaToDisplayAmount(100000).toFixed(6)),
     count: 1,
     expired_time: null,
+    type: 'balance',
+    subscription_plan_id: undefined,
   });
 
   const handleCancel = () => {
@@ -87,6 +92,7 @@ const EditRedemptionModal = (props) => {
         data.expired_time = new Date(data.expired_time * 1000);
       }
       data.amount = Number(quotaToDisplayAmount(data.quota || 0).toFixed(6));
+      setRedemptionType(data.type || 'balance');
       formApiRef.current?.setValues({ ...getInitValues(), ...data });
     } else {
       showError(message);
@@ -94,29 +100,65 @@ const EditRedemptionModal = (props) => {
     setLoading(false);
   };
 
+  const loadSubscriptionPlans = async () => {
+    try {
+      const res = await API.get('/api/subscription/admin/plans');
+      const { success, data } = res.data;
+      if (success && Array.isArray(data)) {
+        setSubscriptionPlans(data);
+      }
+    } catch (error) {
+      showError(error.message);
+    }
+  };
+
   useEffect(() => {
     if (formApiRef.current) {
       if (isEdit) {
         loadRedemption();
       } else {
+        setRedemptionType('balance');
         formApiRef.current.setValues(getInitValues());
       }
     }
   }, [props.editingRedemption.id]);
 
+  useEffect(() => {
+    loadSubscriptionPlans();
+  }, []);
+
   const submit = async (values) => {
     let name = values.name;
-    if (!isEdit && (!name || name === '')) {
-      name = renderQuota(values.quota);
-    }
     setLoading(true);
     let localInputs = { ...values };
     localInputs.count = parseInt(localInputs.count) || 0;
-    localInputs.quota = displayAmountToQuota(localInputs.amount);
-    if (localInputs.quota <= 0) {
-      showError(t('请输入金额'));
-      setLoading(false);
-      return;
+    localInputs.type = localInputs.type || 'balance';
+    if (localInputs.type === 'subscription') {
+      localInputs.quota = 0;
+      localInputs.subscription_plan_id =
+        parseInt(localInputs.subscription_plan_id) || 0;
+      if (localInputs.subscription_plan_id <= 0) {
+        showError(t('请选择订阅套餐'));
+        setLoading(false);
+        return;
+      }
+      if (!isEdit && (!name || name === '')) {
+        const selectedPlan = subscriptionPlans
+          .map(getPlan)
+          .find((plan) => plan?.id === localInputs.subscription_plan_id);
+        name = selectedPlan?.title || t('订阅兑换码');
+      }
+    } else {
+      localInputs.quota = displayAmountToQuota(localInputs.amount);
+      localInputs.subscription_plan_id = 0;
+      if (localInputs.quota <= 0) {
+        showError(t('请输入金额'));
+        setLoading(false);
+        return;
+      }
+      if (!isEdit && (!name || name === '')) {
+        name = renderQuota(localInputs.quota);
+      }
     }
     localInputs.name = name;
     if (!localInputs.expired_time) {
@@ -251,6 +293,28 @@ const EditRedemptionModal = (props) => {
 
                   <Row gutter={12}>
                     <Col span={24}>
+                      <Form.Select
+                        field='type'
+                        label={t('兑换物品')}
+                        style={{ width: '100%' }}
+                        optionList={[
+                          { label: t('可兑换余额'), value: 'balance' },
+                          { label: t('可兑换订阅'), value: 'subscription' },
+                        ]}
+                        onChange={(value) => {
+                          const nextType = value || 'balance';
+                          setRedemptionType(nextType);
+                          formApiRef.current?.setValue('type', nextType);
+                          if (nextType !== 'subscription') {
+                            formApiRef.current?.setValue(
+                              'subscription_plan_id',
+                              undefined,
+                            );
+                          }
+                        }}
+                      />
+                    </Col>
+                    <Col span={24}>
                       <Form.Input
                         field='name'
                         label={t('名称')}
@@ -298,64 +362,85 @@ const EditRedemptionModal = (props) => {
                   </div>
 
                   <Row gutter={12}>
-                    <Col span={24}>
-                      <Form.InputNumber
-                        field='amount'
-                        label={t('金额')}
-                        prefix={getCurrencyConfig().symbol}
-                        placeholder={t('输入金额')}
-                        precision={6}
-                        min={0}
-                        step={0.000001}
-                        style={{ width: '100%' }}
-                        onChange={(val) => {
-                          const amount = val === '' || val == null ? 0 : val;
-                          formApiRef.current?.setValue('amount', amount);
-                          formApiRef.current?.setValue(
-                            'quota',
-                            displayAmountToQuota(amount),
-                          );
-                        }}
-                        showClear
-                      />
-                      <div
-                        className='text-xs cursor-pointer mt-1'
-                        style={{ color: 'var(--semi-color-text-2)' }}
-                        onClick={() => setShowQuotaInput((v) => !v)}
-                      >
-                        {showQuotaInput
-                          ? `▾ ${t('收起原生额度输入')}`
-                          : `▸ ${t('使用原生额度输入')}`}
-                      </div>
-                      <div style={{ display: showQuotaInput ? 'block' : 'none' }} className='mt-2'>
+                    {redemptionType !== 'subscription' ? (
+                      <Col span={24}>
                         <Form.InputNumber
-                          field='quota'
-                          label={t('额度')}
-                          placeholder={t('输入额度')}
-                          rules={[
-                            { required: true, message: t('请输入额度') },
-                            {
-                              validator: (rule, v) => {
-                                const num = parseInt(v, 10);
-                                return num > 0
-                                  ? Promise.resolve()
-                                  : Promise.reject(t('额度必须大于0'));
-                              },
-                            },
-                          ]}
+                          field='amount'
+                          label={t('金额')}
+                          prefix={getCurrencyConfig().symbol}
+                          placeholder={t('输入金额')}
+                          precision={6}
+                          min={0}
+                          step={0.000001}
+                          style={{ width: '100%' }}
                           onChange={(val) => {
-                            const quota = val === '' || val == null ? 0 : val;
-                            formApiRef.current?.setValue('quota', quota);
+                            const amount = val === '' || val == null ? 0 : val;
+                            formApiRef.current?.setValue('amount', amount);
                             formApiRef.current?.setValue(
-                              'amount',
-                              Number(quotaToDisplayAmount(quota).toFixed(6)),
+                              'quota',
+                              displayAmountToQuota(amount),
                             );
                           }}
-                          style={{ width: '100%' }}
                           showClear
                         />
-                      </div>
-                    </Col>
+                        <div
+                          className='text-xs cursor-pointer mt-1'
+                          style={{ color: 'var(--semi-color-text-2)' }}
+                          onClick={() => setShowQuotaInput((v) => !v)}
+                        >
+                          {showQuotaInput
+                            ? `▾ ${t('收起原生额度输入')}`
+                            : `▸ ${t('使用原生额度输入')}`}
+                        </div>
+                        <div
+                          style={{ display: showQuotaInput ? 'block' : 'none' }}
+                          className='mt-2'
+                        >
+                          <Form.InputNumber
+                            field='quota'
+                            label={t('额度')}
+                            placeholder={t('输入额度')}
+                            rules={[
+                              { required: true, message: t('请输入额度') },
+                              {
+                                validator: (rule, v) => {
+                                  const num = parseInt(v, 10);
+                                  return num > 0
+                                    ? Promise.resolve()
+                                    : Promise.reject(t('额度必须大于0'));
+                                },
+                              },
+                            ]}
+                            onChange={(val) => {
+                              const quota = val === '' || val == null ? 0 : val;
+                              formApiRef.current?.setValue('quota', quota);
+                              formApiRef.current?.setValue(
+                                'amount',
+                                Number(quotaToDisplayAmount(quota).toFixed(6)),
+                              );
+                            }}
+                            style={{ width: '100%' }}
+                            showClear
+                          />
+                        </div>
+                      </Col>
+                    ) : (
+                      <Col span={24}>
+                        <Form.Select
+                          field='subscription_plan_id'
+                          label={t('订阅套餐')}
+                          placeholder={t('选择要兑换的订阅套餐')}
+                          style={{ width: '100%' }}
+                          optionList={subscriptionPlans.map((item) => {
+                            const plan = getPlan(item);
+                            return {
+                              label: `${plan.title} · ${renderQuota(plan.total_amount || 0)} · ${plan.duration_value || 1}${plan.duration_unit || 'month'}`,
+                              value: plan.id,
+                            };
+                          })}
+                        />
+                      </Col>
+                    )}
                     {!isEdit && (
                       <Col span={12}>
                         <Form.InputNumber

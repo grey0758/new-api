@@ -281,6 +281,9 @@ func SetApiRouter(router *gin.Engine) {
 		}
 
 		redemptionRoute := apiRouter.Group("/redemption")
+		redemptionRoute.GET("/generate-with-token", controller.GenerateRedemptionWithToken)
+		redemptionRoute.POST("/generate-with-token", controller.GenerateRedemptionWithToken)
+		redemptionRoute.GET("/subscription-plans-with-token", controller.GetRedemptionSubscriptionPlansWithToken)
 		redemptionRoute.Use(middleware.AdminAuth())
 		{
 			redemptionRoute.GET("/", controller.GetAllRedemptions)

@@ -50,6 +50,9 @@ func InitOptionMap() {
 	common.OptionMap["ChannelCooldownFailureThreshold"] = strconv.Itoa(common.ChannelCooldownFailureThreshold)
 	common.OptionMap["ChannelCooldownFailureWindowSeconds"] = strconv.Itoa(common.ChannelCooldownFailureWindowSeconds)
 	common.OptionMap["ChannelCooldownSeconds"] = strconv.Itoa(common.ChannelCooldownSeconds)
+	common.OptionMap["ChannelCooldownProbeEnabled"] = strconv.FormatBool(common.ChannelCooldownProbeEnabled)
+	common.OptionMap["ChannelCooldownProbeIntervalSeconds"] = strconv.Itoa(common.ChannelCooldownProbeIntervalSeconds)
+	common.OptionMap["ChannelCooldownProbeTimeoutSeconds"] = strconv.Itoa(common.ChannelCooldownProbeTimeoutSeconds)
 	common.OptionMap["LogConsumeEnabled"] = strconv.FormatBool(common.LogConsumeEnabled)
 	common.OptionMap["DisplayInCurrencyEnabled"] = strconv.FormatBool(common.DisplayInCurrencyEnabled)
 	common.OptionMap["DisplayTokenStatEnabled"] = strconv.FormatBool(common.DisplayTokenStatEnabled)
@@ -537,6 +540,12 @@ func updateOptionMap(key string, value string) (err error) {
 		common.ChannelCooldownFailureWindowSeconds, _ = strconv.Atoi(value)
 	case "ChannelCooldownSeconds":
 		common.ChannelCooldownSeconds, _ = strconv.Atoi(value)
+	case "ChannelCooldownProbeEnabled":
+		common.ChannelCooldownProbeEnabled = value == "true"
+	case "ChannelCooldownProbeIntervalSeconds":
+		common.ChannelCooldownProbeIntervalSeconds, _ = strconv.Atoi(value)
+	case "ChannelCooldownProbeTimeoutSeconds":
+		common.ChannelCooldownProbeTimeoutSeconds, _ = strconv.Atoi(value)
 	case "DataExportInterval":
 		common.DataExportInterval, _ = strconv.Atoi(value)
 	case "DataExportDefaultTime":

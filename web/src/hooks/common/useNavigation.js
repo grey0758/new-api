@@ -19,19 +19,48 @@ For commercial licensing, please contact support@quantumnous.com
 
 import { useMemo } from 'react';
 
-export const useNavigation = (t, docsLink, headerNavModules) => {
+function isModuleEnabled(modules, key) {
+  const value = modules[key];
+  if (key === 'pricing') {
+    return typeof value === 'object' ? value.enabled : value;
+  }
+  if (typeof value === 'object' && value !== null) {
+    return value.enabled !== false;
+  }
+  return value === true;
+}
+
+function getModuleLink(modules, key, fallback) {
+  const value = modules[key];
+  if (typeof value === 'object' && value !== null) {
+    const link = typeof value.link === 'string' ? value.link.trim() : '';
+    if (link) {
+      return link;
+    }
+  }
+  return fallback;
+}
+
+export const useNavigation = (t, docsLink, headerNavModules, userState) => {
   const mainNavLinks = useMemo(() => {
+    const canUseOps = Number(userState?.user?.role || 0) >= 10;
     // 默认配置，如果没有传入配置则显示所有模块
     const defaultModules = {
       home: true,
       console: true,
       pricing: true,
       docs: true,
-      about: true,
+      install: true,
+      ops: true,
+      about: false,
     };
 
     // 使用传入的配置或默认配置
-    const modules = headerNavModules || defaultModules;
+    const modules = {
+      ...defaultModules,
+      ...(headerNavModules || {}),
+    };
+    const installLink = getModuleLink(modules, 'install', '/install/');
 
     const allLinks = [
       {
@@ -60,6 +89,17 @@ export const useNavigation = (t, docsLink, headerNavModules) => {
           ]
         : []),
       {
+        text: t('点我安装'),
+        itemKey: 'install',
+        isExternal: true,
+        externalLink: installLink,
+      },
+      {
+        text: t('兑换运维'),
+        itemKey: 'ops',
+        to: '/newapi-ops',
+      },
+      {
         text: t('关于'),
         itemKey: 'about',
         to: '/about',
@@ -69,17 +109,14 @@ export const useNavigation = (t, docsLink, headerNavModules) => {
     // 根据配置过滤导航链接
     return allLinks.filter((link) => {
       if (link.itemKey === 'docs') {
-        return docsLink && modules.docs;
+        return docsLink && isModuleEnabled(modules, 'docs');
       }
-      if (link.itemKey === 'pricing') {
-        // 支持新的pricing配置格式
-        return typeof modules.pricing === 'object'
-          ? modules.pricing.enabled
-          : modules.pricing;
+      if (link.itemKey === 'ops') {
+        return canUseOps && isModuleEnabled(modules, 'ops');
       }
-      return modules[link.itemKey] === true;
+      return isModuleEnabled(modules, link.itemKey);
     });
-  }, [t, docsLink, headerNavModules]);
+  }, [t, docsLink, headerNavModules, userState?.user?.role]);
 
   return {
     mainNavLinks,

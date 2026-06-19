@@ -49,7 +49,6 @@ func (p *RetryParam) ResetRetryNextTry() {
 func (p *RetryParam) ResetSelectionCycle() {
 	p.SetRetry(0)
 	p.resetNextTry = false
-	p.ExcludedChannelIds = nil
 	if p.Ctx != nil && p.TokenGroup == "auto" {
 		common.SetContextKey(p.Ctx, constant.ContextKeyAutoGroupIndex, 0)
 		common.SetContextKey(p.Ctx, constant.ContextKeyAutoGroupRetryIndex, 0)

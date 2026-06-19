@@ -17,6 +17,16 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const (
+	responsesStreamGuardMaxBufferedEvents = 16
+	responsesStreamGuardMaxBufferedBytes  = 64 << 10
+)
+
+type responsesStreamBufferedChunk struct {
+	data     string
+	response dto.ResponsesStreamResponse
+}
+
 func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
 
@@ -82,17 +92,34 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	var usage = &dto.Usage{}
 	var responseTextBuilder strings.Builder
 	completed := false
+	var streamErr error
+	modelName := responsesStreamModelName(info)
+	channelID := responsesStreamChannelID(info)
 
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	guardStream := true
+	if !service.ShouldGuardResponsesStream(c, modelName) {
+		service.RecordResponsesStreamGuard(c, modelName)
+	}
+	if guardStream && info != nil {
+		originalDisablePing := info.DisablePing
+		info.DisablePing = true
+		defer func() {
+			info.DisablePing = originalDisablePing
+		}()
+	}
+	guardCommitted := !guardStream
+	bufferedChunks := make([]responsesStreamBufferedChunk, 0, responsesStreamGuardMaxBufferedEvents)
+	bufferedBytes := 0
 
-		// 检查当前数据是否包含 completed 状态和 usage 信息
-		var streamResponse dto.ResponsesStreamResponse
-		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
-			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
-			sr.Error(err)
-			return
+	flushBufferedChunks := func() {
+		for _, chunk := range bufferedChunks {
+			sendResponsesStreamData(c, info, chunk.response, chunk.data)
 		}
-		sendResponsesStreamData(c, info, streamResponse, data)
+		bufferedChunks = bufferedChunks[:0]
+		bufferedBytes = 0
+	}
+
+	processStreamResponse := func(streamResponse dto.ResponsesStreamResponse) {
 		if streamResponse.Response != nil && streamResponse.Response.ID != "" {
 			c.Set("relay_response_id", streamResponse.Response.ID)
 		}
@@ -121,10 +148,8 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				}
 			}
 		case "response.output_text.delta":
-			// 处理输出文本
 			responseTextBuilder.WriteString(streamResponse.Delta)
 		case dto.ResponsesOutputTypeItemDone:
-			// 函数调用处理
 			if streamResponse.Item != nil {
 				switch streamResponse.Item.Type {
 				case dto.BuildInCallWebSearchCall:
@@ -136,11 +161,58 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				}
 			}
 		}
+	}
+
+	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+
+		// 检查当前数据是否包含 completed 状态和 usage 信息
+		var streamResponse dto.ResponsesStreamResponse
+		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
+			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
+			sr.Error(err)
+			return
+		}
+
+		if isResponsesStreamFatalEvent(streamResponse) {
+			streamErr = responsesStreamFatalEventError(streamResponse)
+			service.RecordResponsesStreamGuard(c, modelName)
+			if info.SendResponseCount == 0 && c != nil && c.Writer != nil && !c.Writer.Written() {
+				sr.Stop(streamErr)
+				return
+			}
+			sendResponsesStreamData(c, info, streamResponse, data)
+			sr.Stop(streamErr)
+			return
+		}
+
+		processStreamResponse(streamResponse)
+
+		if !guardCommitted {
+			bufferedChunks = append(bufferedChunks, responsesStreamBufferedChunk{data: data, response: streamResponse})
+			bufferedBytes += len(data)
+			if shouldCommitResponsesStreamGuard(streamResponse, len(bufferedChunks), bufferedBytes) {
+				flushBufferedChunks()
+				guardCommitted = true
+			}
+			return
+		}
+
+		sendResponsesStreamData(c, info, streamResponse, data)
 	})
+
+	if streamErr != nil {
+		service.RecordResponsesStreamFailover(c, modelName, channelID)
+		service.RecordResponsesStreamGuard(c, modelName)
+		if info.SendResponseCount == 0 && c != nil && c.Writer != nil && !c.Writer.Written() {
+			return nil, types.NewOpenAIError(streamErr, types.ErrorCodeResponsesStreamIncomplete, http.StatusServiceUnavailable)
+		}
+		logger.LogError(c, streamErr.Error())
+	}
 
 	if !completed {
 		err := fmt.Errorf("responses stream closed before response.completed: end=%s received=%d sent=%d", info.StreamStatus.Summary(), info.ReceivedResponseCount, info.SendResponseCount)
-		service.RecordResponsesStreamFailover(c, info.OriginModelName, info.ChannelId)
+		service.RecordResponsesStreamFailover(c, modelName, channelID)
+		service.RecordResponsesStreamGuard(c, modelName)
 		if info.SendResponseCount == 0 && c != nil && c.Writer != nil && !c.Writer.Written() {
 			return nil, types.NewOpenAIError(err, types.ErrorCodeResponsesStreamIncomplete, http.StatusServiceUnavailable)
 		}
@@ -164,4 +236,52 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 
 	return usage, nil
+}
+
+func isResponsesStreamFatalEvent(streamResponse dto.ResponsesStreamResponse) bool {
+	switch streamResponse.Type {
+	case "response.error", "response.failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func responsesStreamFatalEventError(streamResponse dto.ResponsesStreamResponse) error {
+	if streamResponse.Response != nil {
+		if oaiErr := streamResponse.Response.GetOpenAIError(); oaiErr != nil {
+			message := strings.TrimSpace(oaiErr.Message)
+			if message != "" {
+				return fmt.Errorf("responses stream error: type=%s code=%v message=%s", streamResponse.Type, oaiErr.Code, message)
+			}
+		}
+	}
+	return fmt.Errorf("responses stream error: %s", streamResponse.Type)
+}
+
+func shouldCommitResponsesStreamGuard(streamResponse dto.ResponsesStreamResponse, bufferedEvents int, bufferedBytes int) bool {
+	if streamResponse.Type == "response.completed" {
+		return true
+	}
+	if strings.TrimSpace(streamResponse.Delta) != "" {
+		return true
+	}
+	if streamResponse.Type == dto.ResponsesOutputTypeItemDone && streamResponse.Item != nil {
+		return true
+	}
+	return bufferedEvents >= responsesStreamGuardMaxBufferedEvents || bufferedBytes >= responsesStreamGuardMaxBufferedBytes
+}
+
+func responsesStreamModelName(info *relaycommon.RelayInfo) string {
+	if info == nil {
+		return ""
+	}
+	return info.OriginModelName
+}
+
+func responsesStreamChannelID(info *relaycommon.RelayInfo) int {
+	if info == nil {
+		return 0
+	}
+	return info.ChannelId
 }

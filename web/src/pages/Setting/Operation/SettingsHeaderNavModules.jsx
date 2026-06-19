@@ -47,6 +47,11 @@ export default function SettingsHeaderNavModules(props) {
       requireAuth: false, // 默认不需要登录鉴权
     },
     docs: true,
+    install: {
+      enabled: true,
+      link: '/install/',
+    },
+    ops: true,
     about: true,
   });
 
@@ -58,6 +63,13 @@ export default function SettingsHeaderNavModules(props) {
         // 对于pricing模块，只更新enabled属性
         newModules[moduleKey] = {
           ...newModules[moduleKey],
+          enabled: checked,
+        };
+      } else if (moduleKey === 'install') {
+        newModules[moduleKey] = {
+          ...(typeof newModules[moduleKey] === 'object'
+            ? newModules[moduleKey]
+            : { link: '/install/' }),
           enabled: checked,
         };
       } else {
@@ -87,6 +99,11 @@ export default function SettingsHeaderNavModules(props) {
         requireAuth: false,
       },
       docs: true,
+      install: {
+        enabled: true,
+        link: '/install/',
+      },
+      ops: true,
       about: true,
     };
     setHeaderNavModules(defaultModules);
@@ -142,6 +159,21 @@ export default function SettingsHeaderNavModules(props) {
           };
         }
 
+        if (modules.install === undefined) {
+          modules.install = {
+            enabled: true,
+            link: '/install/',
+          };
+        } else if (modules.install === true) {
+          modules.install = {
+            enabled: true,
+            link: '/install/',
+          };
+        }
+        if (modules.ops === undefined) {
+          modules.ops = true;
+        }
+
         setHeaderNavModules(modules);
       } catch (error) {
         // 使用默认配置
@@ -153,6 +185,11 @@ export default function SettingsHeaderNavModules(props) {
             requireAuth: false,
           },
           docs: true,
+          install: {
+            enabled: true,
+            link: '/install/',
+          },
+          ops: true,
           about: true,
         };
         setHeaderNavModules(defaultModules);
@@ -182,6 +219,16 @@ export default function SettingsHeaderNavModules(props) {
       key: 'docs',
       title: t('文档'),
       description: t('系统文档和帮助信息'),
+    },
+    {
+      key: 'install',
+      title: t('点我安装'),
+      description: t('OpenCodex 用户安装页面'),
+    },
+    {
+      key: 'ops',
+      title: t('兑换运维'),
+      description: t('兑换码文案生成页面'),
     },
     {
       key: 'about',
@@ -245,8 +292,8 @@ export default function SettingsHeaderNavModules(props) {
                   <div style={{ marginLeft: '16px' }}>
                     <Switch
                       checked={
-                        module.key === 'pricing'
-                          ? headerNavModules[module.key]?.enabled
+                        typeof headerNavModules[module.key] === 'object'
+                          ? headerNavModules[module.key]?.enabled !== false
                           : headerNavModules[module.key]
                       }
                       onChange={handleHeaderNavModuleChange(module.key)}
@@ -257,8 +304,8 @@ export default function SettingsHeaderNavModules(props) {
 
                 {/* 为模型广场添加权限控制子开关 */}
                 {module.key === 'pricing' &&
-                  (module.key === 'pricing'
-                    ? headerNavModules[module.key]?.enabled
+                  (typeof headerNavModules[module.key] === 'object'
+                    ? headerNavModules[module.key]?.enabled !== false
                     : headerNavModules[module.key]) && (
                     <div
                       style={{

@@ -48,6 +48,7 @@ export const useModelPricingData = () => {
   const [vendorsMap, setVendorsMap] = useState({});
   const [loading, setLoading] = useState(true);
   const [groupRatio, setGroupRatio] = useState({});
+  const [displayGroupRatio, setDisplayGroupRatio] = useState({});
   const [usableGroup, setUsableGroup] = useState({});
   const [endpointMap, setEndpointMap] = useState({});
   const [autoGroups, setAutoGroups] = useState([]);
@@ -235,12 +236,18 @@ export const useModelPricingData = () => {
       data,
       vendors,
       group_ratio,
+      display_group_ratio,
       usable_group,
       supported_endpoint,
       auto_groups,
     } = res.data;
     if (success) {
-      setGroupRatio(group_ratio);
+      const mergedGroupRatio = {
+        ...(group_ratio || {}),
+        ...(display_group_ratio || {}),
+      };
+      setGroupRatio(mergedGroupRatio);
+      setDisplayGroupRatio(display_group_ratio || {});
       setUsableGroup(usable_group);
       setSelectedGroup('all');
       // 构建供应商 Map 方便查找
@@ -253,7 +260,7 @@ export const useModelPricingData = () => {
       setVendorsMap(vendorMap);
       setEndpointMap(supported_endpoint || {});
       setAutoGroups(auto_groups || []);
-      setModelsFormat(data, group_ratio, vendorMap);
+      setModelsFormat(data, mergedGroupRatio, vendorMap);
     } else {
       showError(message);
     }
@@ -290,7 +297,11 @@ export const useModelPricingData = () => {
 
   const handleGroupClick = (group) => {
     setSelectedGroup(group);
-    setFilterGroup(group);
+    if (displayGroupRatio[group] !== undefined) {
+      setFilterGroup('all');
+    } else {
+      setFilterGroup(group);
+    }
     if (group === 'all') {
       showInfo(t('已切换至最优倍率视图，每个模型使用其最低倍率分组'));
     } else {
@@ -371,6 +382,7 @@ export const useModelPricingData = () => {
     models,
     loading,
     groupRatio,
+    displayGroupRatio,
     usableGroup,
     endpointMap,
     autoGroups,
