@@ -58,8 +58,13 @@ func shouldNormalizeResponsesRequestArguments(info *relaycommon.RelayInfo) bool 
 		return false
 	}
 	baseURL := strings.ToLower(strings.TrimSpace(info.ChannelBaseUrl))
-	return strings.Contains(baseURL, "api.openai.com") ||
-		strings.Contains(baseURL, "988665.xyz")
+	if strings.Contains(baseURL, "cliproxy") ||
+		strings.Contains(baseURL, "codex2api.com") ||
+		strings.Contains(baseURL, "127.0.0.1:8317") ||
+		strings.Contains(baseURL, "localhost:8317") {
+		return false
+	}
+	return true
 }
 
 // parseReasoningEffortFromModelSuffix 从模型名称中解析推理级别
