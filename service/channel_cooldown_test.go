@@ -43,6 +43,102 @@ func TestRecordChannelFailureForCooldownLocal(t *testing.T) {
 	require.True(t, IsChannelCoolingDown(9))
 }
 
+func TestSingleActorFailuresDoNotTriggerChannelCooldown(t *testing.T) {
+	originalEnabled := common.AutomaticChannelCooldownEnabled
+	originalRedisEnabled := common.RedisEnabled
+	originalThreshold := common.ChannelCooldownFailureThreshold
+	originalWindow := common.ChannelCooldownFailureWindowSeconds
+	originalCooldown := common.ChannelCooldownSeconds
+	t.Cleanup(func() {
+		common.AutomaticChannelCooldownEnabled = originalEnabled
+		common.RedisEnabled = originalRedisEnabled
+		common.ChannelCooldownFailureThreshold = originalThreshold
+		common.ChannelCooldownFailureWindowSeconds = originalWindow
+		common.ChannelCooldownSeconds = originalCooldown
+		channelCooldownMu.Lock()
+		channelCooldownLocal = map[int]channelCooldownEntry{}
+		channelCooldownMu.Unlock()
+	})
+
+	common.AutomaticChannelCooldownEnabled = true
+	common.RedisEnabled = false
+	common.ChannelCooldownFailureThreshold = 2
+	common.ChannelCooldownFailureWindowSeconds = 60
+	common.ChannelCooldownSeconds = 60
+	channelError := *types.NewChannelError(33, 1, "shared-channel", false, "", true)
+	upstreamErr := types.NewOpenAIError(errors.New("upstream failed"), types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
+
+	RecordChannelFailureForCooldownWithActor(channelError, upstreamErr, "gpt-5.5", 161, 211)
+	RecordChannelFailureForCooldownWithActor(channelError, upstreamErr, "gpt-5.5", 161, 211)
+
+	require.False(t, IsChannelCoolingDown(33))
+}
+
+func TestMultipleActorFailuresTriggerChannelCooldown(t *testing.T) {
+	originalEnabled := common.AutomaticChannelCooldownEnabled
+	originalRedisEnabled := common.RedisEnabled
+	originalThreshold := common.ChannelCooldownFailureThreshold
+	originalWindow := common.ChannelCooldownFailureWindowSeconds
+	originalCooldown := common.ChannelCooldownSeconds
+	t.Cleanup(func() {
+		common.AutomaticChannelCooldownEnabled = originalEnabled
+		common.RedisEnabled = originalRedisEnabled
+		common.ChannelCooldownFailureThreshold = originalThreshold
+		common.ChannelCooldownFailureWindowSeconds = originalWindow
+		common.ChannelCooldownSeconds = originalCooldown
+		channelCooldownMu.Lock()
+		channelCooldownLocal = map[int]channelCooldownEntry{}
+		channelCooldownMu.Unlock()
+	})
+
+	common.AutomaticChannelCooldownEnabled = true
+	common.RedisEnabled = false
+	common.ChannelCooldownFailureThreshold = 2
+	common.ChannelCooldownFailureWindowSeconds = 60
+	common.ChannelCooldownSeconds = 60
+	channelError := *types.NewChannelError(34, 1, "shared-channel", false, "", true)
+	upstreamErr := types.NewOpenAIError(errors.New("upstream failed"), types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
+
+	RecordChannelFailureForCooldownWithActor(channelError, upstreamErr, "gpt-5.5", 161, 211)
+	RecordChannelFailureForCooldownWithActor(channelError, upstreamErr, "gpt-5.5", 266, 340)
+
+	require.True(t, IsChannelCoolingDown(34))
+}
+
+func TestClientRequestValidationErrorDoesNotTriggerChannelCooldown(t *testing.T) {
+	originalEnabled := common.AutomaticChannelCooldownEnabled
+	originalRedisEnabled := common.RedisEnabled
+	originalThreshold := common.ChannelCooldownFailureThreshold
+	originalWindow := common.ChannelCooldownFailureWindowSeconds
+	originalCooldown := common.ChannelCooldownSeconds
+	t.Cleanup(func() {
+		common.AutomaticChannelCooldownEnabled = originalEnabled
+		common.RedisEnabled = originalRedisEnabled
+		common.ChannelCooldownFailureThreshold = originalThreshold
+		common.ChannelCooldownFailureWindowSeconds = originalWindow
+		common.ChannelCooldownSeconds = originalCooldown
+		channelCooldownMu.Lock()
+		channelCooldownLocal = map[int]channelCooldownEntry{}
+		channelCooldownMu.Unlock()
+	})
+
+	common.AutomaticChannelCooldownEnabled = true
+	common.RedisEnabled = false
+	common.ChannelCooldownFailureThreshold = 1
+	common.ChannelCooldownFailureWindowSeconds = 60
+	common.ChannelCooldownSeconds = 60
+	channelError := *types.NewChannelError(35, 1, "shared-channel", false, "", true)
+	upstreamErr := types.NewOpenAIError(
+		errors.New("Invalid type for 'input[7].arguments': expected an object, but got a string instead."),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusServiceUnavailable,
+	)
+
+	require.True(t, IsClientRequestValidationError(upstreamErr))
+	RecordChannelFailureForCooldownWithActor(channelError, upstreamErr, "gpt-5.5", 161, 211)
+	require.False(t, IsChannelCoolingDown(35))
+}
+
 func TestIsChannelCoolingDownLocalExpires(t *testing.T) {
 	originalEnabled := common.AutomaticChannelCooldownEnabled
 	originalRedisEnabled := common.RedisEnabled

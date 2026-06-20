@@ -24,6 +24,7 @@ type channelCooldownEntry struct {
 	coolUntil     time.Time
 	channelName   string
 	probeModel    string
+	actors        map[string]struct{}
 	probeRequired bool
 	probing       bool
 	nextProbeAt   time.Time
@@ -66,6 +67,10 @@ func RecordChannelFailureForCooldown(channelError types.ChannelError, err *types
 }
 
 func RecordChannelFailureForCooldownWithModel(channelError types.ChannelError, err *types.NewAPIError, modelName string) {
+	RecordChannelFailureForCooldownWithActor(channelError, err, modelName, 0, 0)
+}
+
+func RecordChannelFailureForCooldownWithActor(channelError types.ChannelError, err *types.NewAPIError, modelName string, userId int, tokenId int) {
 	if !shouldRecordChannelFailureForCooldown(channelError, err) {
 		return
 	}
@@ -82,10 +87,10 @@ func RecordChannelFailureForCooldownWithModel(channelError types.ChannelError, e
 		return
 	}
 	if common.RedisEnabled && common.RDB != nil {
-		recordChannelFailureForCooldownRedis(channelError, threshold, window, cooldown, modelName)
+		recordChannelFailureForCooldownRedis(channelError, threshold, window, cooldown, modelName, channelCooldownActorKey(userId, tokenId))
 		return
 	}
-	recordChannelFailureForCooldownLocal(channelError, threshold, window, cooldown, modelName)
+	recordChannelFailureForCooldownLocal(channelError, threshold, window, cooldown, modelName, channelCooldownActorKey(userId, tokenId))
 }
 
 func shouldRecordChannelFailureForCooldown(channelError types.ChannelError, err *types.NewAPIError) bool {
@@ -93,6 +98,9 @@ func shouldRecordChannelFailureForCooldown(channelError types.ChannelError, err 
 		return false
 	}
 	if types.IsSkipRetryError(err) {
+		return false
+	}
+	if IsClientRequestValidationError(err) {
 		return false
 	}
 	if IsTransientCredentialCooldownError(err) {
@@ -111,6 +119,40 @@ func shouldRecordChannelFailureForCooldown(channelError types.ChannelError, err 
 		return true
 	}
 	return ShouldDisableChannel(err)
+}
+
+func IsClientRequestValidationError(err *types.NewAPIError) bool {
+	if err == nil {
+		return false
+	}
+	lowerMessage := strings.ToLower(err.Error())
+	lowerCode := strings.ToLower(string(err.GetErrorCode()))
+	lowerType := strings.ToLower(string(err.GetErrorType()))
+	if openAIErr, ok := err.RelayError.(types.OpenAIError); ok {
+		lowerMessage += " " + strings.ToLower(openAIErr.Message)
+		lowerType += " " + strings.ToLower(openAIErr.Type)
+		lowerCode += " " + strings.ToLower(fmt.Sprintf("%v", openAIErr.Code))
+	}
+	if strings.Contains(lowerCode, "invalid_type") || strings.Contains(lowerType, "invalid_request") {
+		return true
+	}
+	clientValidationHints := []string{
+		"invalid type for",
+		"expected an object",
+		"expected object",
+		"got a string instead",
+		"unknown parameter",
+		"missing required parameter",
+		"invalid parameter",
+		"invalid request body",
+		"invalid request",
+	}
+	for _, hint := range clientValidationHints {
+		if strings.Contains(lowerMessage, hint) {
+			return true
+		}
+	}
+	return false
 }
 
 func IsTransientCredentialCooldownError(err *types.NewAPIError) bool {
@@ -290,7 +332,7 @@ func serviceShouldCooldownByStatusCode(code int) bool {
 	return code == 429 || code == 408 || code >= 500 || code == 401 || code == 403
 }
 
-func recordChannelFailureForCooldownRedis(channelError types.ChannelError, threshold int, window time.Duration, cooldown time.Duration, modelName string) {
+func recordChannelFailureForCooldownRedis(channelError types.ChannelError, threshold int, window time.Duration, cooldown time.Duration, modelName string, actorKey string) {
 	ctx := context.Background()
 	failureKey := channelCooldownFailureKey(channelError.ChannelId)
 	count, err := common.RDB.Incr(ctx, failureKey).Result()
@@ -301,20 +343,38 @@ func recordChannelFailureForCooldownRedis(channelError types.ChannelError, thres
 	if count == 1 {
 		_ = common.RDB.Expire(ctx, failureKey, window).Err()
 	}
+	if actorKey != "" {
+		actorsKey := channelCooldownActorsKey(channelError.ChannelId)
+		if err := common.RDB.SAdd(ctx, actorsKey, actorKey).Err(); err != nil {
+			common.SysError(fmt.Sprintf("channel cooldown actor counter failed: channel #%d: %s", channelError.ChannelId, err.Error()))
+			return
+		}
+		_ = common.RDB.Expire(ctx, actorsKey, window).Err()
+	}
 	if count < int64(threshold) {
 		return
+	}
+	if actorKey != "" {
+		actors, err := common.RDB.SCard(ctx, channelCooldownActorsKey(channelError.ChannelId)).Result()
+		if err != nil {
+			common.SysError(fmt.Sprintf("channel cooldown actor read failed: channel #%d: %s", channelError.ChannelId, err.Error()))
+			return
+		}
+		if actors < 2 {
+			return
+		}
 	}
 	cooldownKey := channelCooldownKey(channelError.ChannelId)
 	if err := common.RDB.Set(ctx, cooldownKey, "1", cooldown).Err(); err != nil {
 		common.SysError(fmt.Sprintf("channel cooldown set failed: channel #%d: %s", channelError.ChannelId, err.Error()))
 		return
 	}
-	_ = common.RDB.Del(ctx, failureKey).Err()
+	_ = common.RDB.Del(ctx, failureKey, channelCooldownActorsKey(channelError.ChannelId)).Err()
 	trackChannelCooldownProbe(channelError, modelName)
 	common.SysLog(fmt.Sprintf("通道「%s」（#%d）连续失败 %d 次，临时冷却 %s", channelError.ChannelName, channelError.ChannelId, count, cooldown.String()))
 }
 
-func recordChannelFailureForCooldownLocal(channelError types.ChannelError, threshold int, window time.Duration, cooldown time.Duration, modelName string) {
+func recordChannelFailureForCooldownLocal(channelError types.ChannelError, threshold int, window time.Duration, cooldown time.Duration, modelName string, actorKey string) {
 	now := time.Now()
 	channelCooldownMu.Lock()
 	defer channelCooldownMu.Unlock()
@@ -322,19 +382,38 @@ func recordChannelFailureForCooldownLocal(channelError types.ChannelError, thres
 	if entry.windowAt.IsZero() || now.Sub(entry.windowAt) > window {
 		entry.windowAt = now
 		entry.failures = 0
+		entry.actors = nil
 	}
 	entry.failures++
+	if actorKey != "" {
+		if entry.actors == nil {
+			entry.actors = map[string]struct{}{}
+		}
+		entry.actors[actorKey] = struct{}{}
+	}
 	if entry.failures >= threshold {
+		if actorKey != "" && len(entry.actors) < 2 {
+			channelCooldownLocal[channelError.ChannelId] = entry
+			return
+		}
 		entry.coolUntil = now.Add(cooldown)
 		entry.channelName = channelError.ChannelName
 		entry.probeModel = strings.TrimSpace(modelName)
 		entry.nextProbeAt = now
 		entry.failures = 0
+		entry.actors = nil
 		entry.windowAt = now
 		trackChannelCooldownProbeLocked(channelError, modelName)
 		common.SysLog(fmt.Sprintf("通道「%s」（#%d）连续失败 %d 次，临时冷却 %s", channelError.ChannelName, channelError.ChannelId, threshold, cooldown.String()))
 	}
 	channelCooldownLocal[channelError.ChannelId] = entry
+}
+
+func channelCooldownActorKey(userId int, tokenId int) string {
+	if userId <= 0 && tokenId <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("u:%d:t:%d", userId, tokenId)
 }
 
 func StartChannelCooldownProbeTask() {
@@ -463,7 +542,7 @@ func ClearChannelCooldown(channelId int) {
 	channelCooldownMu.Unlock()
 	if common.RedisEnabled && common.RDB != nil {
 		ctx := context.Background()
-		_ = common.RDB.Del(ctx, channelCooldownKey(channelId), channelCooldownFailureKey(channelId)).Err()
+		_ = common.RDB.Del(ctx, channelCooldownKey(channelId), channelCooldownFailureKey(channelId), channelCooldownActorsKey(channelId)).Err()
 	}
 }
 
@@ -633,6 +712,10 @@ func cooldownProbeValueHasContent(value interface{}) bool {
 
 func channelCooldownFailureKey(channelId int) string {
 	return fmt.Sprintf("channel:cooldown:failures:%d", channelId)
+}
+
+func channelCooldownActorsKey(channelId int) string {
+	return fmt.Sprintf("channel:cooldown:actors:%d", channelId)
 }
 
 func channelCooldownKey(channelId int) string {
