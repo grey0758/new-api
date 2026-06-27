@@ -2,6 +2,7 @@ package controller
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -236,15 +237,17 @@ func GetChannelHealthEvents(c *gin.Context) {
 	probeOnly := strings.EqualFold(c.DefaultQuery("probe_only", "false"), "true")
 	scope := normalizeChannelHealthEventScope(c.Query("scope"), probeOnly)
 	since := common.GetTimestamp() - int64(hours)*3600
+	scopeWhere, scopeArgs := channelHealthEventScopeWhere(scope)
 	queryLimit := limit
-	if scope != "all" {
-		queryLimit = limit * 4
-	}
 
 	logs := make([]*model.Log, 0)
-	err = model.LOG_DB.Model(&model.Log{}).
-		Where("channel_id = ? AND created_at >= ? AND type = ? AND other LIKE ?", channelID, since, model.LogTypeSystem, "%\"health_event\":true%").
-		Order("id desc").
+	query := model.LOG_DB.Model(&model.Log{}).
+		Where("channel_id = ? AND created_at >= ? AND type = ? AND other LIKE ?", channelID, since, model.LogTypeSystem, "%\"health_event\":true%")
+	if scopeWhere != "" {
+		query = query.Where(scopeWhere, scopeArgs...)
+	}
+	err = query.
+		Order("created_at desc, id desc").
 		Limit(queryLimit).
 		Find(&logs).Error
 	if err != nil {
@@ -304,6 +307,38 @@ func GetChannelHealthEvents(c *gin.Context) {
 			"window_from": since,
 		},
 	})
+}
+
+func channelHealthEventScopeWhere(scope string) (string, []interface{}) {
+	var eventTypes []string
+	switch scope {
+	case "probe":
+		eventTypes = []string{
+			service.ChannelHealthEventNewAPICooling,
+			service.ChannelHealthEventProbeScanned,
+			service.ChannelHealthEventProbeSkipped,
+			service.ChannelHealthEventProbeWaiting,
+			service.ChannelHealthEventProbeStarted,
+			service.ChannelHealthEventProbeFailed,
+			service.ChannelHealthEventProbeSucceeded,
+			service.ChannelHealthEventManualRecovered,
+		}
+	case "request":
+		eventTypes = []string{
+			service.ChannelHealthEventFinalError,
+			service.ChannelHealthEventIntermediateFailover,
+			service.ChannelHealthEventProviderCooldown,
+		}
+	default:
+		return "", nil
+	}
+	clauses := make([]string, 0, len(eventTypes))
+	args := make([]interface{}, 0, len(eventTypes))
+	for _, eventType := range eventTypes {
+		clauses = append(clauses, "other LIKE ?")
+		args = append(args, fmt.Sprintf("%%\"event_type\":\"%s\"%%", eventType))
+	}
+	return "(" + strings.Join(clauses, " OR ") + ")", args
 }
 
 func RecoverChannelHealthCooldown(c *gin.Context) {
@@ -553,39 +588,15 @@ func resolveChannelHealthStatus(channel *model.Channel, cooldown service.Channel
 		return "disabled", "手动禁用"
 	}
 	if channel.Status == common.ChannelStatusAutoDisabled {
-		return "auto_disabled", "自动禁用"
+		return "disabled", "自动禁用"
 	}
-	if cooldown.CoolingDown {
+	if cooldown.CoolingDown || cooldown.ProbeRequired {
 		if cooldown.ProbeRequired {
 			return "cooling", "当前冷却中，等待主动探针恢复"
 		}
 		return "cooling", "当前冷却中"
 	}
-	if events.ProviderCooldowns > 0 {
-		return "provider_cooling", "近 24 小时曾出现上游限流或凭证池冷却；当前没有 NewAPI 渠道冷却"
-	}
-	if events.FinalErrors > 0 {
-		return "degraded", "近 24 小时存在最终请求错误；当前没有 NewAPI 渠道冷却"
-	}
-	if events.FailoverErrors > 0 {
-		return "degraded", "近 24 小时存在中间渠道失败，已由重试或故障转移接管；当前没有 NewAPI 渠道冷却"
-	}
-	if events.NewAPICooldowns > 0 {
-		return "degraded", "近 24 小时曾触发 NewAPI 渠道冷却；当前没有冷却"
-	}
-	if events.ProbeFailed > 0 {
-		return "degraded", "近 24 小时主动探针失败；当前没有冷却"
-	}
-	if recent.TotalRequests >= 3 && errorRate >= 0.5 {
-		return "degraded", "近 24 小时错误率偏高；当前没有 NewAPI 渠道冷却"
-	}
-	if recent.TotalRequests > 0 {
-		return "operational", "近 24 小时有成功路由观察"
-	}
-	if channel.TestTime > 0 {
-		return "operational", "已有最近测试记录"
-	}
-	return "unobserved", "暂无近 24 小时请求或测试记录"
+	return "operational", "当前未禁用，未冷却；探针通过后显示正常"
 }
 
 func incrementSummary(summary gin.H, status string) {

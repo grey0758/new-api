@@ -54,12 +54,8 @@ const { Text, Title } = Typography;
 
 const statusMeta = {
   operational: { color: 'green', label: '正常', icon: ShieldCheck },
-  degraded: { color: 'orange', label: '历史异常', icon: AlertTriangle },
-  provider_cooling: { color: 'orange', label: '历史上游限流', icon: Zap },
   cooling: { color: 'yellow', label: '当前冷却', icon: Thermometer },
   disabled: { color: 'red', label: '手动禁用', icon: AlertTriangle },
-  auto_disabled: { color: 'red', label: '自动禁用', icon: AlertTriangle },
-  unobserved: { color: 'grey', label: '未观测', icon: Clock3 },
 };
 
 function formatTime(timestamp) {
@@ -79,7 +75,7 @@ function formatDuration(seconds) {
 }
 
 function getStatusMeta(status) {
-  return statusMeta[status] || statusMeta.unobserved;
+  return statusMeta[status] || statusMeta.operational;
 }
 
 function getEventLabel(eventType) {
@@ -262,12 +258,8 @@ const ChannelHealth = () => {
   const statusChartData = useMemo(
     () => [
       { type: t('正常'), value: summary?.operational || 0 },
-      { type: t('历史上游限流'), value: summary?.provider_cooling || 0 },
       { type: t('当前冷却'), value: summary?.cooling || 0 },
-      { type: t('历史异常'), value: summary?.degraded || 0 },
       { type: t('手动禁用'), value: summary?.disabled || 0 },
-      { type: t('自动禁用'), value: summary?.auto_disabled || 0 },
-      { type: t('未观测'), value: summary?.unobserved || 0 },
     ],
     [summary, t],
   );
@@ -355,12 +347,8 @@ const ChannelHealth = () => {
       color: {
         specified: {
           [t('正常')]: '#2ca02c',
-          [t('历史上游限流')]: '#f39c12',
           [t('当前冷却')]: '#f5a623',
-          [t('历史异常')]: '#ff7f0e',
           [t('手动禁用')]: '#d9534f',
-          [t('自动禁用')]: '#c0392b',
-          [t('未观测')]: '#8c8c8c',
         },
       },
     }),
@@ -1168,12 +1156,8 @@ const ChannelHealth = () => {
               optionList={[
                 { label: t('全部状态'), value: 'all' },
                 { label: t('正常'), value: 'operational' },
-                { label: t('历史异常'), value: 'degraded' },
-                { label: t('历史上游限流'), value: 'provider_cooling' },
                 { label: t('当前冷却'), value: 'cooling' },
                 { label: t('手动禁用'), value: 'disabled' },
-                { label: t('自动禁用'), value: 'auto_disabled' },
-                { label: t('未观测'), value: 'unobserved' },
               ]}
             />
           </Space>
