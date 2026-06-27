@@ -263,7 +263,7 @@ func shouldCommitResponsesStreamGuard(streamResponse dto.ResponsesStreamResponse
 	if streamResponse.Type == "response.completed" {
 		return true
 	}
-	if strings.TrimSpace(streamResponse.Delta) != "" {
+	if streamResponse.Type == "response.output_text.delta" && strings.TrimSpace(streamResponse.Delta) != "" {
 		return true
 	}
 	if streamResponse.Type == dto.ResponsesOutputTypeItemDone && streamResponse.Item != nil {

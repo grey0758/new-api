@@ -29,13 +29,44 @@ type channelCooldownEntry struct {
 	probing       bool
 	nextProbeAt   time.Time
 	lastProbeAt   time.Time
+	lastFailureAt time.Time
 	lastError     string
+}
+
+type ChannelCooldownStatus struct {
+	ChannelID              int    `json:"channel_id"`
+	ChannelName            string `json:"channel_name,omitempty"`
+	CoolingDown            bool   `json:"cooling_down"`
+	CooldownTTLSeconds     int64  `json:"cooldown_ttl_seconds"`
+	CoolUntil              int64  `json:"cool_until"`
+	FailureCount           int    `json:"failure_count"`
+	FailureWindowStartedAt int64  `json:"failure_window_started_at"`
+	ActorCount             int64  `json:"actor_count"`
+	ProbeRequired          bool   `json:"probe_required"`
+	Probing                bool   `json:"probing"`
+	ProbeModel             string `json:"probe_model,omitempty"`
+	NextProbeAt            int64  `json:"next_probe_at"`
+	LastProbeAt            int64  `json:"last_probe_at"`
+	LastFailureAt          int64  `json:"last_failure_at"`
+	LastError              string `json:"last_error,omitempty"`
+}
+
+type channelCooldownProbeEvent struct {
+	eventType   string
+	channelId   int
+	channelName string
+	modelName   string
+	content     string
+	other       map[string]interface{}
 }
 
 var (
 	channelCooldownMu    sync.Mutex
 	channelCooldownLocal = map[int]channelCooldownEntry{}
 )
+
+const channelCooldownProbeRecentErrorWindow = time.Hour
+const channelCooldownProbeModel = "gpt-5.5"
 
 func IsChannelCoolingDown(channelId int) bool {
 	if !common.AutomaticChannelCooldownEnabled || channelId <= 0 || common.ChannelCooldownSeconds <= 0 {
@@ -103,6 +134,9 @@ func shouldRecordChannelFailureForCooldown(channelError types.ChannelError, err 
 	if IsClientRequestValidationError(err) {
 		return false
 	}
+	if IsRequestScopedUpstreamRejectionError(err) {
+		return false
+	}
 	if IsTransientCredentialCooldownError(err) {
 		return false
 	}
@@ -110,6 +144,9 @@ func shouldRecordChannelFailureForCooldown(channelError types.ChannelError, err 
 		return false
 	}
 	if IsTransientProviderCooldownError(err) {
+		return false
+	}
+	if err.StatusCode == http.StatusTooManyRequests {
 		return false
 	}
 	if isTransientRelayFailoverMessage(strings.ToLower(err.Error())) {
@@ -149,6 +186,33 @@ func IsClientRequestValidationError(err *types.NewAPIError) bool {
 	}
 	for _, hint := range clientValidationHints {
 		if strings.Contains(lowerMessage, hint) {
+			return true
+		}
+	}
+	return false
+}
+
+func IsRequestScopedUpstreamRejectionError(err *types.NewAPIError) bool {
+	if err == nil {
+		return false
+	}
+	lowerMessage := strings.ToLower(err.Error())
+	lowerCode := strings.ToLower(string(err.GetErrorCode()))
+	lowerType := strings.ToLower(string(err.GetErrorType()))
+	if openAIErr, ok := err.RelayError.(types.OpenAIError); ok {
+		lowerMessage += " " + strings.ToLower(openAIErr.Message)
+		lowerType += " " + strings.ToLower(openAIErr.Type)
+		lowerCode += " " + strings.ToLower(fmt.Sprintf("%v", openAIErr.Code))
+	}
+	requestScopedHints := []string{
+		"cyber_policy",
+		"cybersecurity risk",
+		"content was flagged",
+		"no tool call found for function call output",
+		"function call output with call_id",
+	}
+	for _, hint := range requestScopedHints {
+		if strings.Contains(lowerMessage, hint) || strings.Contains(lowerCode, hint) || strings.Contains(lowerType, hint) {
 			return true
 		}
 	}
@@ -221,6 +285,15 @@ func IsTransientProviderCooldownError(err *types.NewAPIError) bool {
 		return true
 	}
 	if strings.Contains(lowerMessage, "too many requests") && (strings.Contains(lowerMessage, "cooldown") || strings.Contains(lowerMessage, "retry")) {
+		return true
+	}
+	if strings.Contains(lowerMessage, "rate_limit_exceeded") {
+		return true
+	}
+	if strings.Contains(lowerMessage, "concurrency limit exceeded") && strings.Contains(lowerMessage, "retry") {
+		return true
+	}
+	if strings.Contains(lowerMessage, "billing service temporarily unavailable") && strings.Contains(lowerMessage, "retry") {
 		return true
 	}
 	if strings.Contains(lowerMessage, "冷却") {
@@ -329,7 +402,7 @@ func isTransientUpstreamStatusCode(code int) bool {
 }
 
 func serviceShouldCooldownByStatusCode(code int) bool {
-	return code == 429 || code == 408 || code >= 500 || code == 401 || code == 403
+	return code == 408 || code >= 500 || code == 401 || code == 403
 }
 
 func recordChannelFailureForCooldownRedis(channelError types.ChannelError, threshold int, window time.Duration, cooldown time.Duration, modelName string, actorKey string) {
@@ -370,14 +443,24 @@ func recordChannelFailureForCooldownRedis(channelError types.ChannelError, thres
 		return
 	}
 	_ = common.RDB.Del(ctx, failureKey, channelCooldownActorsKey(channelError.ChannelId)).Err()
-	trackChannelCooldownProbe(channelError, modelName)
+	probeEnabled := trackChannelCooldownProbe(channelError, modelName)
+	RecordChannelCooldownHealthEvent(ChannelHealthEventNewAPICooling, channelError.ChannelId, channelError.ChannelName, modelName, fmt.Sprintf("通道连续失败 %d 次，进入 NewAPI 渠道冷却", count), map[string]interface{}{
+		"failure_count":    count,
+		"cooldown_seconds": int64(cooldown.Seconds()),
+	})
+	if probeEnabled {
+		RecordChannelCooldownHealthEvent(ChannelHealthEventProbeWaiting, channelError.ChannelId, channelError.ChannelName, channelCooldownProbeModel, "等待主动探针恢复", nil)
+	}
 	common.SysLog(fmt.Sprintf("通道「%s」（#%d）连续失败 %d 次，临时冷却 %s", channelError.ChannelName, channelError.ChannelId, count, cooldown.String()))
 }
 
 func recordChannelFailureForCooldownLocal(channelError types.ChannelError, threshold int, window time.Duration, cooldown time.Duration, modelName string, actorKey string) {
 	now := time.Now()
+	var (
+		probeEnabled     bool
+		coolingTriggered bool
+	)
 	channelCooldownMu.Lock()
-	defer channelCooldownMu.Unlock()
 	entry := channelCooldownLocal[channelError.ChannelId]
 	if entry.windowAt.IsZero() || now.Sub(entry.windowAt) > window {
 		entry.windowAt = now
@@ -394,19 +477,35 @@ func recordChannelFailureForCooldownLocal(channelError types.ChannelError, thres
 	if entry.failures >= threshold {
 		if actorKey != "" && len(entry.actors) < 2 {
 			channelCooldownLocal[channelError.ChannelId] = entry
+			channelCooldownMu.Unlock()
 			return
 		}
 		entry.coolUntil = now.Add(cooldown)
 		entry.channelName = channelError.ChannelName
 		entry.probeModel = strings.TrimSpace(modelName)
 		entry.nextProbeAt = now
+		entry.lastFailureAt = now
 		entry.failures = 0
 		entry.actors = nil
 		entry.windowAt = now
-		trackChannelCooldownProbeLocked(channelError, modelName)
-		common.SysLog(fmt.Sprintf("通道「%s」（#%d）连续失败 %d 次，临时冷却 %s", channelError.ChannelName, channelError.ChannelId, threshold, cooldown.String()))
+		if shouldTrackChannelCooldownProbe(channelError) {
+			entry = applyChannelCooldownProbeEntry(entry, channelError, now)
+			probeEnabled = true
+		}
+		coolingTriggered = true
 	}
 	channelCooldownLocal[channelError.ChannelId] = entry
+	channelCooldownMu.Unlock()
+	if coolingTriggered {
+		RecordChannelCooldownHealthEvent(ChannelHealthEventNewAPICooling, channelError.ChannelId, channelError.ChannelName, modelName, fmt.Sprintf("通道连续失败 %d 次，进入 NewAPI 渠道冷却", threshold), map[string]interface{}{
+			"failure_count":    threshold,
+			"cooldown_seconds": int64(cooldown.Seconds()),
+		})
+		if probeEnabled {
+			RecordChannelCooldownHealthEvent(ChannelHealthEventProbeWaiting, channelError.ChannelId, channelError.ChannelName, channelCooldownProbeModel, "等待主动探针恢复", nil)
+		}
+		common.SysLog(fmt.Sprintf("通道「%s」（#%d）连续失败 %d 次，临时冷却 %s", channelError.ChannelName, channelError.ChannelId, threshold, cooldown.String()))
+	}
 }
 
 func channelCooldownActorKey(userId int, tokenId int) string {
@@ -418,7 +517,11 @@ func channelCooldownActorKey(userId int, tokenId int) string {
 
 func StartChannelCooldownProbeTask() {
 	go func() {
-		ticker := time.NewTicker(15 * time.Second)
+		interval := time.Duration(common.ChannelCooldownProbeIntervalSeconds) * time.Second
+		if interval <= 0 {
+			interval = time.Minute
+		}
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		common.SysLog("channel cooldown active probe task started")
 		for range ticker.C {
@@ -434,29 +537,38 @@ func isChannelAwaitingProbe(channelId int) bool {
 	return ok && entry.probeRequired && !entry.coolUntil.IsZero()
 }
 
-func trackChannelCooldownProbe(channelError types.ChannelError, modelName string) {
+func trackChannelCooldownProbe(channelError types.ChannelError, modelName string) bool {
+	now := time.Now()
+	if !shouldTrackChannelCooldownProbe(channelError) {
+		return false
+	}
 	channelCooldownMu.Lock()
 	defer channelCooldownMu.Unlock()
-	trackChannelCooldownProbeLocked(channelError, modelName)
+	return trackChannelCooldownProbeLocked(channelError, modelName, now)
 }
 
-func trackChannelCooldownProbeLocked(channelError types.ChannelError, modelName string) {
-	if !common.ChannelCooldownProbeEnabled || !supportsChannelCooldownProbe(channelError.ChannelType) {
-		return
-	}
+func trackChannelCooldownProbeLocked(channelError types.ChannelError, modelName string, now time.Time) bool {
 	entry := channelCooldownLocal[channelError.ChannelId]
+	entry = applyChannelCooldownProbeEntry(entry, channelError, now)
+	channelCooldownLocal[channelError.ChannelId] = entry
+	return true
+}
+
+func applyChannelCooldownProbeEntry(entry channelCooldownEntry, channelError types.ChannelError, now time.Time) channelCooldownEntry {
 	entry.channelName = channelError.ChannelName
-	entry.probeModel = strings.TrimSpace(modelName)
+	entry.probeModel = channelCooldownProbeModel
 	entry.probeRequired = true
+	entry.probing = false
+	entry.lastFailureAt = now
 	if entry.coolUntil.IsZero() {
 		cooldown := time.Duration(common.ChannelCooldownSeconds) * time.Second
 		if cooldown <= 0 {
 			cooldown = 5 * time.Minute
 		}
-		entry.coolUntil = time.Now().Add(cooldown)
+		entry.coolUntil = now.Add(cooldown)
 	}
-	entry.nextProbeAt = time.Now()
-	channelCooldownLocal[channelError.ChannelId] = entry
+	entry.nextProbeAt = now
+	return entry
 }
 
 func supportsChannelCooldownProbe(channelType int) bool {
@@ -472,6 +584,36 @@ func supportsChannelCooldownProbe(channelType int) bool {
 	}
 }
 
+func shouldTrackChannelCooldownProbe(channelError types.ChannelError) bool {
+	if !common.ChannelCooldownProbeEnabled || channelError.ChannelId <= 0 {
+		return false
+	}
+	channel, err := model.CacheGetChannel(channelError.ChannelId)
+	if err != nil || channel == nil {
+		return false
+	}
+	if channel.Status != common.ChannelStatusEnabled {
+		return false
+	}
+	if !supportsChannelCooldownProbe(channel.Type) {
+		return false
+	}
+	return channelSupportsActiveProbeGroup(channel)
+}
+
+func channelSupportsActiveProbeGroup(channel *model.Channel) bool {
+	if channel == nil {
+		return false
+	}
+	for _, group := range channel.GetGroups() {
+		switch strings.ToLower(strings.TrimSpace(group)) {
+		case "plus", "pro":
+			return true
+		}
+	}
+	return false
+}
+
 func runDueChannelCooldownProbes() {
 	if !common.AutomaticChannelCooldownEnabled || !common.ChannelCooldownProbeEnabled {
 		return
@@ -482,27 +624,99 @@ func runDueChannelCooldownProbes() {
 	}
 	now := time.Now()
 	type probeJob struct {
-		channelId int
-		modelName string
+		channelId   int
+		channelName string
+		modelName   string
 	}
 	jobs := make([]probeJob, 0)
+	events := make([]channelCooldownProbeEvent, 0)
 	channelCooldownMu.Lock()
 	for channelId, entry := range channelCooldownLocal {
-		if entry.coolUntil.IsZero() || !entry.probeRequired || entry.probing {
+		if entry.coolUntil.IsZero() || !entry.probeRequired {
+			continue
+		}
+		if entry.probing {
 			continue
 		}
 		if !entry.nextProbeAt.IsZero() && now.Before(entry.nextProbeAt) {
+			continue
+		}
+		modelName := strings.TrimSpace(entry.probeModel)
+		if modelName == "" {
+			modelName = channelCooldownProbeModel
+			entry.probeModel = modelName
+		}
+		events = append(events, channelCooldownProbeEvent{
+			eventType:   ChannelHealthEventProbeScanned,
+			channelId:   channelId,
+			channelName: entry.channelName,
+			modelName:   modelName,
+			content:     "主动探针扫描到待恢复渠道",
+			other: map[string]interface{}{
+				"next_probe_at":   unixOrZero(entry.nextProbeAt),
+				"last_failure_at": unixOrZero(entry.lastFailureAt),
+			},
+		})
+		if !entry.lastFailureAt.IsZero() && now.Sub(entry.lastFailureAt) > channelCooldownProbeRecentErrorWindow {
+			entry.probeRequired = false
+			channelCooldownLocal[channelId] = entry
+			events = append(events, probeSkipEvent(channelId, entry.channelName, modelName, "recent_error_window_expired", "最近错误已超过主动探针窗口，停止恢复探针"))
+			continue
+		}
+		channel, err := model.CacheGetChannel(channelId)
+		if err != nil || channel == nil {
+			entry.probeRequired = false
+			channelCooldownLocal[channelId] = entry
+			events = append(events, probeSkipEvent(channelId, entry.channelName, modelName, "channel_not_found", "渠道不存在，跳过主动探针"))
+			continue
+		}
+		if entry.channelName == "" {
+			entry.channelName = channel.Name
+		}
+		if channel.Status != common.ChannelStatusEnabled {
+			entry.probeRequired = false
+			channelCooldownLocal[channelId] = entry
+			events = append(events, probeSkipEvent(channelId, entry.channelName, modelName, "channel_not_enabled", "渠道未启用，跳过主动探针"))
+			continue
+		}
+		if !channelSupportsActiveProbeGroup(channel) {
+			entry.probeRequired = false
+			channelCooldownLocal[channelId] = entry
+			events = append(events, probeSkipEvent(channelId, entry.channelName, modelName, "group_not_in_probe_scope", "渠道不在 plus/pro 主动探针范围，跳过"))
+			continue
+		}
+		if !supportsChannelCooldownProbe(channel.Type) {
+			entry.probeRequired = false
+			channelCooldownLocal[channelId] = entry
+			events = append(events, probeSkipEvent(channelId, entry.channelName, modelName, "unsupported_channel_type", "渠道类型不支持主动探针，跳过"))
 			continue
 		}
 		entry.probing = true
 		entry.lastProbeAt = now
 		entry.nextProbeAt = now.Add(interval)
 		channelCooldownLocal[channelId] = entry
-		jobs = append(jobs, probeJob{channelId: channelId, modelName: entry.probeModel})
+		jobs = append(jobs, probeJob{channelId: channelId, channelName: entry.channelName, modelName: entry.probeModel})
 	}
 	channelCooldownMu.Unlock()
+	for _, event := range events {
+		RecordChannelCooldownHealthEvent(event.eventType, event.channelId, event.channelName, event.modelName, event.content, event.other)
+	}
 	for _, job := range jobs {
+		RecordChannelCooldownHealthEvent(ChannelHealthEventProbeStarted, job.channelId, job.channelName, job.modelName, "主动探针开始", nil)
 		go probeAndRecoverChannelCooldown(job.channelId, job.modelName)
+	}
+}
+
+func probeSkipEvent(channelId int, channelName string, modelName string, reason string, content string) channelCooldownProbeEvent {
+	return channelCooldownProbeEvent{
+		eventType:   ChannelHealthEventProbeSkipped,
+		channelId:   channelId,
+		channelName: channelName,
+		modelName:   modelName,
+		content:     content,
+		other: map[string]interface{}{
+			"skip_reason": reason,
+		},
 	}
 }
 
@@ -513,6 +727,8 @@ func probeAndRecoverChannelCooldown(channelId int, modelName string) {
 	}
 	err := probeChannelCooldown(channelId, modelName, timeout)
 	if err == nil {
+		channelName := getChannelCooldownEntryName(channelId)
+		RecordChannelCooldownHealthEvent(ChannelHealthEventProbeSucceeded, channelId, channelName, modelName, "主动探针通过，渠道恢复调度", nil)
 		ClearChannelCooldown(channelId)
 		common.SysLog(fmt.Sprintf("通道 #%d 冷却主动探测通过，已恢复调度", channelId))
 		return
@@ -520,6 +736,7 @@ func probeAndRecoverChannelCooldown(channelId int, modelName string) {
 	channelCooldownMu.Lock()
 	entry := channelCooldownLocal[channelId]
 	entry.probing = false
+	entry.lastFailureAt = time.Now()
 	entry.lastError = err.Error()
 	if entry.nextProbeAt.IsZero() {
 		interval := time.Duration(common.ChannelCooldownProbeIntervalSeconds) * time.Second
@@ -530,7 +747,14 @@ func probeAndRecoverChannelCooldown(channelId int, modelName string) {
 	}
 	channelCooldownLocal[channelId] = entry
 	channelCooldownMu.Unlock()
+	RecordChannelCooldownHealthEvent(ChannelHealthEventProbeFailed, channelId, entry.channelName, modelName, err.Error(), nil)
 	common.SysLog(fmt.Sprintf("通道 #%d 冷却主动探测未通过: %s", channelId, err.Error()))
+}
+
+func getChannelCooldownEntryName(channelId int) string {
+	channelCooldownMu.Lock()
+	defer channelCooldownMu.Unlock()
+	return channelCooldownLocal[channelId].channelName
 }
 
 func ClearChannelCooldown(channelId int) {
@@ -546,6 +770,80 @@ func ClearChannelCooldown(channelId int) {
 	}
 }
 
+func GetChannelCooldownStatuses(channelIds []int) map[int]ChannelCooldownStatus {
+	statuses := make(map[int]ChannelCooldownStatus, len(channelIds))
+	now := time.Now()
+
+	channelCooldownMu.Lock()
+	for _, channelId := range channelIds {
+		entry, ok := channelCooldownLocal[channelId]
+		if !ok {
+			continue
+		}
+		status := ChannelCooldownStatus{
+			ChannelID:              channelId,
+			ChannelName:            entry.channelName,
+			CoolingDown:            (!entry.coolUntil.IsZero() && now.Before(entry.coolUntil)) || entry.probeRequired || entry.probing,
+			CooldownTTLSeconds:     secondsUntil(now, entry.coolUntil),
+			CoolUntil:              unixOrZero(entry.coolUntil),
+			FailureCount:           entry.failures,
+			FailureWindowStartedAt: unixOrZero(entry.windowAt),
+			ProbeRequired:          entry.probeRequired,
+			Probing:                entry.probing,
+			ProbeModel:             entry.probeModel,
+			NextProbeAt:            unixOrZero(entry.nextProbeAt),
+			LastProbeAt:            unixOrZero(entry.lastProbeAt),
+			LastFailureAt:          unixOrZero(entry.lastFailureAt),
+			LastError:              entry.lastError,
+		}
+		status.ActorCount = int64(len(entry.actors))
+		statuses[channelId] = status
+	}
+	channelCooldownMu.Unlock()
+
+	if common.RedisEnabled && common.RDB != nil {
+		ctx := context.Background()
+		for _, channelId := range channelIds {
+			status := statuses[channelId]
+			if status.ChannelID == 0 {
+				status.ChannelID = channelId
+			}
+			if ttl, err := common.RDB.TTL(ctx, channelCooldownKey(channelId)).Result(); err == nil && ttl > 0 {
+				status.CoolingDown = true
+				status.CooldownTTLSeconds = int64(ttl.Seconds())
+				if status.CoolUntil == 0 {
+					status.CoolUntil = now.Add(ttl).Unix()
+				}
+			}
+			if count, err := common.RDB.Get(ctx, channelCooldownFailureKey(channelId)).Int(); err == nil && count > status.FailureCount {
+				status.FailureCount = count
+			}
+			if actors, err := common.RDB.SCard(ctx, channelCooldownActorsKey(channelId)).Result(); err == nil && actors > status.ActorCount {
+				status.ActorCount = actors
+			}
+			if status.ChannelID != 0 {
+				statuses[channelId] = status
+			}
+		}
+	}
+
+	return statuses
+}
+
+func secondsUntil(now time.Time, t time.Time) int64 {
+	if t.IsZero() || !now.Before(t) {
+		return 0
+	}
+	return int64(t.Sub(now).Seconds())
+}
+
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
+}
+
 func probeChannelCooldown(channelId int, modelName string, timeout time.Duration) error {
 	channel, err := model.CacheGetChannel(channelId)
 	if err != nil {
@@ -555,11 +853,9 @@ func probeChannelCooldown(channelId int, modelName string, timeout time.Duration
 		return fmt.Errorf("channel not found")
 	}
 	if channel.Status != common.ChannelStatusEnabled {
-		ClearChannelCooldown(channelId)
 		return fmt.Errorf("channel is not enabled")
 	}
 	if !supportsChannelCooldownProbe(channel.Type) {
-		ClearChannelCooldown(channelId)
 		return fmt.Errorf("channel type %d does not support active cooldown probe", channel.Type)
 	}
 	modelName = resolveCooldownProbeModel(channel, modelName)
@@ -570,16 +866,7 @@ func probeChannelCooldown(channelId int, modelName string, timeout time.Duration
 }
 
 func resolveCooldownProbeModel(channel *model.Channel, modelName string) string {
-	modelName = strings.TrimSpace(modelName)
-	if modelName == "" && channel.TestModel != nil {
-		modelName = strings.TrimSpace(*channel.TestModel)
-	}
-	if modelName == "" {
-		models := channel.GetModels()
-		if len(models) > 0 {
-			modelName = strings.TrimSpace(models[0])
-		}
-	}
+	modelName = channelCooldownProbeModel
 	mapped, err := resolveCooldownProbeMappedModel(modelName, channel.GetModelMapping())
 	if err == nil && mapped != "" {
 		return mapped

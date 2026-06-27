@@ -106,6 +106,8 @@ func Distribute() func(c *gin.Context) {
 							channel = nil
 						} else if preferred.Status != common.ChannelStatusEnabled {
 							service.ClearCurrentChannelAffinity(c)
+						} else if service.IsChannelCoolingDown(preferred.Id) {
+							service.ClearCurrentChannelAffinity(c)
 						} else if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 							autoGroups := service.GetUserAutoGroup(userGroup)

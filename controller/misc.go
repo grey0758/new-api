@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -49,9 +50,13 @@ func GetStatus(c *gin.Context) {
 	legalSetting := system_setting.GetLegalSettings()
 	baseURL := strings.TrimRight(system_setting.ServerAddress, "/")
 	installLink := strings.TrimSpace(operation_setting.GetGeneralSetting().InstallLink)
+	if envInstallLink := strings.TrimSpace(os.Getenv("NEWAPI_INSTALL_LINK")); envInstallLink != "" {
+		installLink = envInstallLink
+	}
 	if installLink == "" && baseURL != "" {
 		installLink = baseURL + "/install/"
 	}
+	headerNavModules := runtimeHeaderNavModules(common.OptionMap["HeaderNavModules"], installLink)
 
 	data := gin.H{
 		"version":                     common.Version,
@@ -106,7 +111,7 @@ func GetStatus(c *gin.Context) {
 		"faq_enabled":           cs.FAQEnabled,
 
 		// 模块管理配置
-		"HeaderNavModules":    common.OptionMap["HeaderNavModules"],
+		"HeaderNavModules":    headerNavModules,
 		"SidebarModulesAdmin": common.OptionMap["SidebarModulesAdmin"],
 
 		"oidc_enabled":                system_setting.GetOIDCSettings().Enabled,
@@ -170,6 +175,61 @@ func GetStatus(c *gin.Context) {
 		"data":    data,
 	})
 	return
+}
+
+func runtimeHeaderNavModules(storedValue string, installLink string) string {
+	override := strings.TrimSpace(os.Getenv("NEWAPI_HEADER_NAV_MODULES"))
+	if override != "" {
+		storedValue = override
+	}
+
+	installEnabledValue := strings.TrimSpace(os.Getenv("NEWAPI_INSTALL_ENABLED"))
+	envInstallLink := strings.TrimSpace(os.Getenv("NEWAPI_INSTALL_LINK"))
+	if installEnabledValue == "" && envInstallLink == "" {
+		return storedValue
+	}
+
+	modules := map[string]interface{}{}
+	if strings.TrimSpace(storedValue) != "" {
+		_ = json.Unmarshal([]byte(storedValue), &modules)
+	}
+
+	installConfig := map[string]interface{}{}
+	switch current := modules["install"].(type) {
+	case map[string]interface{}:
+		for key, value := range current {
+			installConfig[key] = value
+		}
+	case bool:
+		installConfig["enabled"] = current
+	}
+
+	if installEnabledValue != "" {
+		installConfig["enabled"] = parseEnvBool(installEnabledValue)
+	}
+	if envInstallLink != "" {
+		installConfig["link"] = envInstallLink
+	} else if installLink != "" {
+		if _, ok := installConfig["link"]; !ok {
+			installConfig["link"] = installLink
+		}
+	}
+	modules["install"] = installConfig
+
+	encoded, err := json.Marshal(modules)
+	if err != nil {
+		return storedValue
+	}
+	return string(encoded)
+}
+
+func parseEnvBool(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on", "enabled":
+		return true
+	default:
+		return false
+	}
 }
 
 func GetNotice(c *gin.Context) {

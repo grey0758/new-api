@@ -61,6 +61,7 @@ export default function SettingsSidebarModulesAdmin(props) {
     admin: {
       enabled: true,
       channel: true,
+      channelHealth: true,
       models: true,
       deployment: true,
       redemption: true,
@@ -254,6 +255,11 @@ export default function SettingsSidebarModulesAdmin(props) {
       description: t('系统管理功能'),
       modules: [
         { key: 'channel', title: t('渠道管理'), description: t('API渠道配置') },
+        {
+          key: 'channelHealth',
+          title: t('渠道健康度'),
+          description: t('上游渠道健康与冷却追踪'),
+        },
         { key: 'models', title: t('模型管理'), description: t('AI模型配置') },
         {
           key: 'deployment',

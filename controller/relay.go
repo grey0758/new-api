@@ -88,6 +88,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	defer func() {
 		if newAPIError != nil {
 			logger.LogError(c, fmt.Sprintf("relay error: %s", newAPIError.Error()))
+			service.RecordFinalChannelHealthError(c, newAPIError)
 			newAPIError = sanitizeRelayErrorForUser(c, newAPIError)
 			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
 			switch relayFormat {
@@ -424,6 +425,7 @@ func shouldRetryRelayError(openaiErr *types.NewAPIError) bool {
 
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, err.Error()))
+	service.RecordRelayChannelHealthEvent(c, channelError, err)
 	service.RecordUpstream400ViolationCandidate(c, channelError, err)
 	c.Set("relay_channel_error_seen", true)
 	if !service.IsResponsesStreamIncompleteError(err) {

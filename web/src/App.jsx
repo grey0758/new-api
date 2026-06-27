@@ -32,6 +32,7 @@ import { StatusContext } from './context/Status';
 import PasswordResetForm from './components/auth/PasswordResetForm';
 import PasswordResetConfirm from './components/auth/PasswordResetConfirm';
 import Channel from './pages/Channel';
+import ChannelHealth from './pages/ChannelHealth';
 import Token from './pages/Token';
 import Redemption from './pages/Redemption';
 import OpsRedemption from './pages/OpsRedemption';
@@ -42,6 +43,8 @@ import Chat from './pages/Chat';
 import Chat2Link from './pages/Chat2Link';
 import Midjourney from './pages/Midjourney';
 import Pricing from './pages/Pricing';
+import Install from './pages/Install';
+import ClaudeInstall from './pages/ClaudeInstall';
 import Task from './pages/Task';
 import ModelPage from './pages/Model';
 import ModelDeploymentPage from './pages/ModelDeployment';
@@ -138,6 +141,14 @@ function App() {
           element={
             <AdminRoute>
               <Channel />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path='/console/channel/health'
+          element={
+            <AdminRoute>
+              <ChannelHealth />
             </AdminRoute>
           }
         />
@@ -374,6 +385,38 @@ function App() {
                 <Pricing />
               </Suspense>
             )
+          }
+        />
+        <Route
+          path='/install'
+          element={
+            <PrivateRoute>
+              <Install />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path='/install/'
+          element={
+            <PrivateRoute>
+              <Install />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path='/claude-install'
+          element={
+            <PrivateRoute>
+              <ClaudeInstall />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path='/claude-install/'
+          element={
+            <PrivateRoute>
+              <ClaudeInstall />
+            </PrivateRoute>
           }
         />
         <Route

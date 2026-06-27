@@ -30,5 +30,6 @@ data/
 .gocache-temp
 .gopath
 .runtime/
+tmp/
 
 token_estimator_test.go

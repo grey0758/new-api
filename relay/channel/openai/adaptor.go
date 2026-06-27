@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -44,7 +45,19 @@ func isGrsaiImageCompat(info *relaycommon.RelayInfo) bool {
 	if info == nil {
 		return false
 	}
-	if info.RelayMode != relayconstant.RelayModeImagesEdits {
+	if info.RelayMode != relayconstant.RelayModeImagesGenerations &&
+		info.RelayMode != relayconstant.RelayModeImagesEdits {
+		return false
+	}
+	if !isGrsaiImageBaseURL(info) {
+		return false
+	}
+	return isGrsaiNativeImageModel(info.UpstreamModelName) ||
+		isGrsaiNativeImageModel(info.OriginModelName)
+}
+
+func isGrsaiImageBaseURL(info *relaycommon.RelayInfo) bool {
+	if info == nil {
 		return false
 	}
 	baseURL := strings.ToLower(strings.TrimSpace(info.ChannelBaseUrl))
@@ -470,6 +483,11 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
 	switch info.RelayMode {
+	case relayconstant.RelayModeImagesGenerations:
+		if isGrsaiImageBaseURL(info) && isGrsaiNativeImageModel(request.Model) {
+			return convertGrsaiImageGenerateRequest(request), nil
+		}
+		return request, nil
 	case relayconstant.RelayModeImagesEdits:
 		if isGrsaiImageCompat(info) {
 			return convertGrsaiImageEditRequest(c, request)
@@ -599,6 +617,16 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 	}
 }
 
+func convertGrsaiImageGenerateRequest(request dto.ImageRequest) map[string]any {
+	body := make(map[string]any)
+	body["model"] = request.Model
+	body["prompt"] = request.Prompt
+	body["replyType"] = "json"
+	addGrsaiImageShape(body, request)
+	addGrsaiReferenceImages(body, request)
+	return body
+}
+
 func convertGrsaiImageEditRequest(c *gin.Context, request dto.ImageRequest) (map[string]any, error) {
 	mf := c.Request.MultipartForm
 	if mf == nil {
@@ -615,7 +643,7 @@ func convertGrsaiImageEditRequest(c *gin.Context, request dto.ImageRequest) (map
 	body["model"] = request.Model
 	body["prompt"] = request.Prompt
 	body["replyType"] = "json"
-	body["aspectRatio"] = grsaiAspectRatioFromImageSize(request.Size)
+	addGrsaiImageShape(body, request)
 
 	for key, values := range mf.Value {
 		if key == "" || key == "model" || key == "prompt" || key == "n" ||
@@ -652,23 +680,102 @@ func convertGrsaiImageEditRequest(c *gin.Context, request dto.ImageRequest) (map
 	return body, nil
 }
 
-func grsaiAspectRatioFromImageSize(size string) string {
+func addGrsaiImageShape(body map[string]any, request dto.ImageRequest) {
+	if body == nil {
+		return
+	}
+	if isGrsaiNanoBananaImageModel(request.Model) {
+		body["aspectRatio"] = grsaiAspectRatioFromImageSize("", request.Size, request.Quality)
+		body["imageSize"] = grsaiImageSizeTierFromImageSize(request.Size, request.Quality)
+		return
+	}
+	body["aspectRatio"] = grsaiAspectRatioFromImageSize(request.Model, request.Size, request.Quality)
+}
+
+func addGrsaiReferenceImages(body map[string]any, request dto.ImageRequest) {
+	if body == nil {
+		return
+	}
+	if raw, ok := request.Extra["images"]; ok && len(raw) > 0 {
+		var images any
+		if err := common.Unmarshal(raw, &images); err == nil {
+			body["images"] = images
+			return
+		}
+	}
+	if len(request.Image) == 0 {
+		return
+	}
+	var image any
+	if err := common.Unmarshal(request.Image, &image); err != nil {
+		return
+	}
+	switch value := image.(type) {
+	case []any:
+		body["images"] = value
+	case string:
+		if strings.TrimSpace(value) != "" {
+			body["images"] = []string{value}
+		}
+	default:
+		body["images"] = value
+	}
+}
+
+func grsaiAspectRatioFromImageSize(model, size, quality string) string {
 	size = strings.TrimSpace(size)
+	isVIP := isGrsaiVIPImageModel(model)
 	if size == "" {
+		if isVIP {
+			return "1024x1024"
+		}
 		return "1:1"
 	}
 
+	if isKSize(size) {
+		ratio := "1:1"
+		tier := grsaiResolutionTier(size, quality)
+		if isVIP {
+			return grsaiVIPSizeForRatio(ratio, tier)
+		}
+		return ratio
+	}
+
+	if strings.Contains(size, ":") && !strings.ContainsAny(size, "xX×") {
+		ratio := normalizeGrsaiRatio(size)
+		if isVIP {
+			return grsaiVIPSizeForRatio(ratio, grsaiResolutionTier(size, quality))
+		}
+		return ratio
+	}
+
 	normalized := strings.ReplaceAll(size, "×", "x")
+	normalized = strings.ReplaceAll(normalized, "X", "x")
 	parts := strings.Split(normalized, "x")
 	if len(parts) != 2 {
-		if strings.Contains(size, ":") {
-			return size
+		if isVIP {
+			return "1024x1024"
 		}
 		return "1:1"
 	}
 
 	left := strings.TrimSpace(parts[0])
 	right := strings.TrimSpace(parts[1])
+	width, widthErr := strconv.Atoi(left)
+	height, heightErr := strconv.Atoi(right)
+	if widthErr == nil && heightErr == nil && width > 0 && height > 0 {
+		if isVIP {
+			if isValidGrsaiVIPPixelSize(width, height) {
+				return fmt.Sprintf("%dx%d", width, height)
+			}
+			return grsaiVIPSizeForRatio(grsaiKnownRatio(width, height), grsaiResolutionTierForPixels(width, height, quality))
+		}
+		if isGrsaiStandard1KPixelSize(width, height) {
+			return fmt.Sprintf("%dx%d", width, height)
+		}
+		return grsaiKnownRatio(width, height)
+	}
+
 	switch {
 	case left == right:
 		return "1:1"
@@ -683,6 +790,197 @@ func grsaiAspectRatioFromImageSize(size string) string {
 	default:
 		return fmt.Sprintf("%s:%s", left, right)
 	}
+}
+
+func isGrsaiVIPImageModel(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	if !isGrsaiGPTImageModel(model) {
+		return false
+	}
+	return strings.Contains(model, "vip") ||
+		strings.Contains(model, "pro") ||
+		strings.Contains(model, "max")
+}
+
+func isGrsaiNativeImageModel(model string) bool {
+	return isGrsaiGPTImageModel(model) || isGrsaiNanoBananaImageModel(model)
+}
+
+func isGrsaiGPTImageModel(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	switch model {
+	case "image-2", "gpt-image-2", "gpt-image-2-pro", "gpt-image-2-vip", "gpt-image-2-max":
+		return true
+	default:
+		return false
+	}
+}
+
+func isGrsaiNanoBananaImageModel(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	return strings.HasPrefix(model, "nano-banana") ||
+		strings.HasPrefix(model, "gemini-3.1-flash-image-preview") ||
+		strings.HasPrefix(model, "gemini-3-pro-image-preview")
+}
+
+func isKSize(size string) bool {
+	size = strings.ToLower(strings.TrimSpace(size))
+	return size == "1k" || size == "2k" || size == "4k"
+}
+
+func grsaiImageSizeTierFromImageSize(size, quality string) string {
+	switch grsaiResolutionTierFromImageSize(size, quality) {
+	case 2:
+		return "4K"
+	case 1:
+		return "2K"
+	default:
+		return "1K"
+	}
+}
+
+func grsaiResolutionTierFromImageSize(size, quality string) int {
+	if tier := grsaiResolutionTier(size, quality); tier > 0 {
+		return tier
+	}
+	normalized := strings.ReplaceAll(size, "×", "x")
+	normalized = strings.ReplaceAll(normalized, "X", "x")
+	parts := strings.Split(normalized, "x")
+	if len(parts) != 2 {
+		return 0
+	}
+	width, widthErr := strconv.Atoi(strings.TrimSpace(parts[0]))
+	height, heightErr := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if widthErr != nil || heightErr != nil || width <= 0 || height <= 0 {
+		return 0
+	}
+	return grsaiResolutionTierForPixels(width, height, quality)
+}
+
+func grsaiResolutionTier(size, quality string) int {
+	value := strings.ToLower(strings.TrimSpace(size + " " + quality))
+	switch {
+	case strings.Contains(value, "4k"):
+		return 2
+	case strings.Contains(value, "2k"):
+		return 1
+	default:
+		return 0
+	}
+}
+
+func grsaiResolutionTierForPixels(width, height int, quality string) int {
+	if tier := grsaiResolutionTier("", quality); tier > 0 {
+		return tier
+	}
+	maxSide := width
+	if height > maxSide {
+		maxSide = height
+	}
+	pixels := width * height
+	switch {
+	case maxSide > 3840 || pixels > 4200000:
+		return 2
+	case maxSide >= 1800 || pixels >= 2000000:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func isValidGrsaiVIPPixelSize(width, height int) bool {
+	if width <= 0 || height <= 0 || width%16 != 0 || height%16 != 0 {
+		return false
+	}
+	if width > 3840 || height > 3840 {
+		return false
+	}
+	longSide, shortSide := width, height
+	if height > width {
+		longSide, shortSide = height, width
+	}
+	if longSide > shortSide*3 {
+		return false
+	}
+	pixels := width * height
+	return pixels >= 655360 && pixels <= 8294400
+}
+
+func isGrsaiStandard1KPixelSize(width, height int) bool {
+	switch fmt.Sprintf("%dx%d", width, height) {
+	case "1024x1024", "1672x941", "941x1672", "1443x1090", "1090x1443",
+		"1536x1024", "1024x1536", "1408x1120", "1120x1408",
+		"1920x832", "832x1920", "896x1792", "1792x896":
+		return true
+	default:
+		return false
+	}
+}
+
+func grsaiKnownRatio(width, height int) string {
+	if width <= 0 || height <= 0 {
+		return "1:1"
+	}
+	g := gcd(width, height)
+	ratio := fmt.Sprintf("%d:%d", width/g, height/g)
+	return normalizeGrsaiRatio(ratio)
+}
+
+func normalizeGrsaiRatio(ratio string) string {
+	ratio = strings.TrimSpace(ratio)
+	ratio = strings.ReplaceAll(ratio, " ", "")
+	switch ratio {
+	case "8:7", "7:8":
+		return "1:1"
+	default:
+		return ratio
+	}
+}
+
+func grsaiVIPSizeForRatio(ratio string, tier int) string {
+	if tier < 0 {
+		tier = 0
+	}
+	if tier > 2 {
+		tier = 2
+	}
+	sizes := map[string][3]string{
+		"1:1":  {"1024x1024", "2048x2048", "2880x2880"},
+		"16:9": {"1280x720", "2048x1152", "3840x2160"},
+		"9:16": {"720x1280", "1152x2048", "2160x3840"},
+		"4:3":  {"1152x864", "2304x1728", "3264x2448"},
+		"3:4":  {"864x1152", "1728x2304", "2448x3264"},
+		"3:2":  {"1536x1024", "2048x1360", "3504x2336"},
+		"2:3":  {"1024x1536", "1360x2048", "2336x3504"},
+		"5:4":  {"1120x896", "2240x1792", "3200x2560"},
+		"4:5":  {"896x1120", "1792x2240", "2560x3200"},
+		"21:9": {"1456x624", "2912x1248", "3840x1648"},
+		"9:21": {"624x1456", "1248x2912", "1648x3840"},
+		"1:3":  {"688x2048", "688x2048", "1280x3840"},
+		"3:1":  {"2048x688", "2048x688", "3840x1280"},
+		"2:1":  {"1536x768", "3072x1536", "3840x1920"},
+		"1:2":  {"768x1536", "1536x3072", "1920x3840"},
+	}
+	if values, ok := sizes[normalizeGrsaiRatio(ratio)]; ok {
+		return values[tier]
+	}
+	return sizes["1:1"][tier]
+}
+
+func gcd(a, b int) int {
+	if a < 0 {
+		a = -a
+	}
+	if b < 0 {
+		b = -b
+	}
+	for b != 0 {
+		a, b = b, a%b
+	}
+	if a == 0 {
+		return 1
+	}
+	return a
 }
 
 func collectMultipartImageFiles(mf *multipart.Form) []*multipart.FileHeader {
@@ -769,7 +1067,7 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	case relayconstant.RelayModeAudioTranscription:
 		err, usage = OpenaiSTTHandler(c, resp, info, a.ResponseFormat)
 	case relayconstant.RelayModeImagesGenerations, relayconstant.RelayModeImagesEdits:
-		if info.RelayMode == relayconstant.RelayModeImagesEdits && isGrsaiImageCompat(info) {
+		if isGrsaiImageCompat(info) {
 			usage, err = GrsaiImageHandler(c, info, resp)
 		} else {
 			usage, err = OpenaiHandlerWithUsage(c, info, resp)

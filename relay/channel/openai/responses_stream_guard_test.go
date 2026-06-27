@@ -64,6 +64,16 @@ func TestShouldCommitResponsesStreamGuard(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "reasoning summary delta stays buffered",
+			resp: dto.ResponsesStreamResponse{Type: "response.reasoning_summary_text.delta", Delta: "thinking"},
+			want: false,
+		},
+		{
+			name: "reasoning text delta stays buffered",
+			resp: dto.ResponsesStreamResponse{Type: "response.reasoning_text.delta", Delta: "thinking"},
+			want: false,
+		},
+		{
 			name: "completed commits",
 			resp: dto.ResponsesStreamResponse{Type: "response.completed"},
 			want: true,
