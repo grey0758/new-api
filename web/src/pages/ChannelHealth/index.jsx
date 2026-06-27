@@ -128,6 +128,43 @@ function getHealthEventErrorCount(events = {}) {
   );
 }
 
+function getRequestEventCount(events = {}) {
+  return (
+    (events.final_errors || 0) +
+    (events.failover_errors || 0) +
+    (events.provider_cooldowns || 0)
+  );
+}
+
+function getProbeEventCount(events = {}) {
+  return (
+    (events.newapi_cooldowns || 0) +
+    (events.probe_waiting || 0) +
+    (events.probe_scanned || 0) +
+    (events.probe_skipped || 0) +
+    (events.probe_started || 0) +
+    (events.probe_failed || 0) +
+    (events.probe_succeeded || 0) +
+    (events.manual_recovered || 0)
+  );
+}
+
+function getEventScopeTitle(scope) {
+  if (scope === 'request') return '请求错误历史';
+  if (scope === 'probe') return '探针/冷却历史';
+  return '健康事件历史';
+}
+
+function getEventScopeDescription(scope) {
+  if (scope === 'request') {
+    return '这里仅显示最终请求错误、中间渠道失败但已 failover 成功、上游/provider 凭证池限流等用户请求链路事件。用户额度不足属于请求错误历史，不代表探针失败，也不代表渠道当前冷却。';
+  }
+  if (scope === 'probe') {
+    return '这里仅显示主动探针、NewAPI 渠道冷却和手动恢复历史。探针失败或探针 60s 内没有返回有效流内容时会保持 NewAPI 冷却；手动恢复只清冷却状态，不修改渠道启用/禁用状态。';
+  }
+  return '这里显示最近 7 天的渠道健康事件。';
+}
+
 function StatCard({ icon: Icon, label, value, tone = 'blue' }) {
   const toneMap = {
     blue: 'rgba(24, 144, 255, 0.10)',
@@ -168,6 +205,7 @@ const ChannelHealth = () => {
   const [eventLoading, setEventLoading] = useState(false);
   const [eventRecord, setEventRecord] = useState(null);
   const [eventItems, setEventItems] = useState([]);
+  const [eventScope, setEventScope] = useState('probe');
   const [keyword, setKeyword] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
 
@@ -372,18 +410,20 @@ const ChannelHealth = () => {
     [eventChartData, t],
   );
 
-  const openProbeHistory = async (record) => {
+  const openEventHistory = async (record, scope = 'probe') => {
     setEventRecord(record);
+    setEventScope(scope);
+    setEventItems([]);
     setEventModalVisible(true);
     setEventLoading(true);
     try {
       const res = await API.get(
-        `/api/channel/health/${record.id}/events?hours=168&limit=200&probe_only=false`,
+        `/api/channel/health/${record.id}/events?hours=168&limit=200&scope=${scope}`,
         { disableDuplicate: true },
       );
       const { success, message, data } = res.data || {};
       if (!success) {
-        showError(message || t('获取探针历史失败'));
+        showError(message || t('获取健康事件历史失败'));
         return;
       }
       setEventItems(data?.items || []);
@@ -414,7 +454,7 @@ const ChannelHealth = () => {
           showSuccess(t('已清除该渠道的 NewAPI 冷却/探针状态'));
           await loadHealth();
           if (eventModalVisible && eventRecord?.id === record.id) {
-            await openProbeHistory(record);
+            await openEventHistory(record, eventScope);
           }
         } finally {
           setRecoveringId(null);
@@ -531,21 +571,12 @@ const ChannelHealth = () => {
       },
     },
     {
-      title: t('近24h健康事件'),
+      title: t('请求错误历史'),
       dataIndex: 'events',
-      width: 240,
+      width: 220,
       render: (events) => {
-        const problemEvents = events?.recent_problem_events || 0;
-        if (
-          !problemEvents &&
-          !events?.probe_waiting &&
-          !events?.probe_scanned &&
-          !events?.probe_skipped &&
-          !events?.probe_started &&
-          !events?.probe_succeeded &&
-          !events?.manual_recovered
-        ) {
-          return <Text type='tertiary'>{t('无事件')}</Text>;
+        if (!getRequestEventCount(events)) {
+          return <Text type='tertiary'>{t('无请求错误')}</Text>;
         }
         return (
           <div className='space-y-1'>
@@ -565,6 +596,36 @@ const ChannelHealth = () => {
                   {t('曾上游限流')} {events.provider_cooldowns}
                 </Tag>
               ) : null}
+            </Space>
+            <Text type='tertiary' size='small' ellipsis={{ showTooltip: true }}>
+              {t(getEventLabel(events?.last_request_event_type))}{' '}
+              {formatTime(events?.last_request_event_at)}
+            </Text>
+            {events?.last_request_error_code === 'insufficient_user_quota' ? (
+              <Tag color='grey' size='small'>
+                {t('用户额度不足')}
+              </Tag>
+            ) : null}
+            {events?.last_request_event_message ? (
+              <Text size='small' type='tertiary' ellipsis={{ showTooltip: true }}>
+                {events.last_request_event_message}
+              </Text>
+            ) : null}
+          </div>
+        );
+      },
+    },
+    {
+      title: t('探针/冷却历史'),
+      dataIndex: 'events',
+      width: 230,
+      render: (events) => {
+        if (!getProbeEventCount(events)) {
+          return <Text type='tertiary'>{t('无探针/冷却事件')}</Text>;
+        }
+        return (
+          <div className='space-y-1'>
+            <Space wrap spacing={4}>
               {events?.newapi_cooldowns ? (
                 <Tag color='yellow' size='small'>
                   {t('曾NewAPI冷却')} {events.newapi_cooldowns}
@@ -607,12 +668,12 @@ const ChannelHealth = () => {
               ) : null}
             </Space>
             <Text type='tertiary' size='small' ellipsis={{ showTooltip: true }}>
-              {t(getEventLabel(events?.last_event_type))}{' '}
-              {formatTime(events?.last_event_at)}
+              {t(getEventLabel(events?.last_probe_event_type))}{' '}
+              {formatTime(events?.last_probe_event_at)}
             </Text>
-            {events?.last_event_message ? (
+            {events?.last_probe_event_message ? (
               <Text size='small' type='tertiary' ellipsis={{ showTooltip: true }}>
-                {events.last_event_message}
+                {events.last_probe_event_message}
               </Text>
             ) : null}
           </div>
@@ -736,9 +797,17 @@ const ChannelHealth = () => {
               size='small'
               type='tertiary'
               icon={<Clock3 size={14} />}
-              onClick={() => openProbeHistory(record)}
+              onClick={() => openEventHistory(record, 'probe')}
             >
               {t('探针历史')}
+            </Button>
+            <Button
+              size='small'
+              type='tertiary'
+              icon={<AlertTriangle size={14} />}
+              onClick={() => openEventHistory(record, 'request')}
+            >
+              {t('请求错误')}
             </Button>
             {canRecover ? (
               <Button
@@ -1101,7 +1170,7 @@ const ChannelHealth = () => {
             formatPageText: (page) =>
               `${t('第')} ${page.currentStart} - ${page.currentEnd} ${t('条，共')} ${page.total} ${t('条')}`,
           }}
-          scroll={{ x: 1610 }}
+          scroll={{ x: 2090 }}
           size='middle'
         />
       </Spin>
@@ -1109,8 +1178,8 @@ const ChannelHealth = () => {
       <Modal
         title={
           eventRecord
-            ? `${t('探针/健康事件历史')} #${eventRecord.id} ${eventRecord.name}`
-            : t('探针/健康事件历史')
+            ? `${t(getEventScopeTitle(eventScope))} #${eventRecord.id} ${eventRecord.name}`
+            : t(getEventScopeTitle(eventScope))
         }
         visible={eventModalVisible}
         footer={null}
@@ -1121,9 +1190,7 @@ const ChannelHealth = () => {
           type='info'
           closeIcon={null}
           className='mb-3'
-          description={t(
-            '这里显示最近 7 天的主动探针、冷却和相关健康事件。探针失败或探针 60s 内没有返回有效流内容时会保持 NewAPI 冷却；手动恢复只清冷却状态，不修改渠道启用/禁用状态。',
-          )}
+          description={t(getEventScopeDescription(eventScope))}
         />
         <Table
           rowKey='id'

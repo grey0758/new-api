@@ -23,25 +23,37 @@ type channelHealthLogStat struct {
 }
 
 type channelHealthEventStat struct {
-	ChannelID           int    `json:"channel_id"`
-	FinalErrors         int64  `json:"final_errors"`
-	FailoverErrors      int64  `json:"failover_errors"`
-	ProviderCooldowns   int64  `json:"provider_cooldowns"`
-	NewAPICooldowns     int64  `json:"newapi_cooldowns"`
-	ProbeWaiting        int64  `json:"probe_waiting"`
-	ProbeScanned        int64  `json:"probe_scanned"`
-	ProbeSkipped        int64  `json:"probe_skipped"`
-	ProbeStarted        int64  `json:"probe_started"`
-	ProbeFailed         int64  `json:"probe_failed"`
-	ProbeSucceeded      int64  `json:"probe_succeeded"`
-	ManualRecovered     int64  `json:"manual_recovered"`
-	LastEventAt         int64  `json:"last_event_at"`
-	LastEventType       string `json:"last_event_type"`
-	LastEventMessage    string `json:"last_event_message"`
-	LastStatusCode      int    `json:"last_status_code"`
-	LastErrorType       string `json:"last_error_type"`
-	LastErrorCode       string `json:"last_error_code"`
-	RecentProblemEvents int64  `json:"recent_problem_events"`
+	ChannelID               int    `json:"channel_id"`
+	FinalErrors             int64  `json:"final_errors"`
+	FailoverErrors          int64  `json:"failover_errors"`
+	ProviderCooldowns       int64  `json:"provider_cooldowns"`
+	NewAPICooldowns         int64  `json:"newapi_cooldowns"`
+	ProbeWaiting            int64  `json:"probe_waiting"`
+	ProbeScanned            int64  `json:"probe_scanned"`
+	ProbeSkipped            int64  `json:"probe_skipped"`
+	ProbeStarted            int64  `json:"probe_started"`
+	ProbeFailed             int64  `json:"probe_failed"`
+	ProbeSucceeded          int64  `json:"probe_succeeded"`
+	ManualRecovered         int64  `json:"manual_recovered"`
+	LastEventAt             int64  `json:"last_event_at"`
+	LastEventType           string `json:"last_event_type"`
+	LastEventMessage        string `json:"last_event_message"`
+	LastStatusCode          int    `json:"last_status_code"`
+	LastErrorType           string `json:"last_error_type"`
+	LastErrorCode           string `json:"last_error_code"`
+	LastRequestEventAt      int64  `json:"last_request_event_at"`
+	LastRequestEventType    string `json:"last_request_event_type"`
+	LastRequestEventMessage string `json:"last_request_event_message"`
+	LastRequestStatusCode   int    `json:"last_request_status_code"`
+	LastRequestErrorType    string `json:"last_request_error_type"`
+	LastRequestErrorCode    string `json:"last_request_error_code"`
+	LastProbeEventAt        int64  `json:"last_probe_event_at"`
+	LastProbeEventType      string `json:"last_probe_event_type"`
+	LastProbeEventMessage   string `json:"last_probe_event_message"`
+	LastProbeStatusCode     int    `json:"last_probe_status_code"`
+	LastProbeErrorType      string `json:"last_probe_error_type"`
+	LastProbeErrorCode      string `json:"last_probe_error_code"`
+	RecentProblemEvents     int64  `json:"recent_problem_events"`
 }
 
 type channelHealthItem struct {
@@ -217,9 +229,10 @@ func GetChannelHealthEvents(c *gin.Context) {
 	limit := parseBoundedPositiveInt(c.Query("limit"), 100, 500)
 	hours := parseBoundedPositiveInt(c.Query("hours"), 24, 168)
 	probeOnly := strings.EqualFold(c.DefaultQuery("probe_only", "false"), "true")
+	scope := normalizeChannelHealthEventScope(c.Query("scope"), probeOnly)
 	since := common.GetTimestamp() - int64(hours)*3600
 	queryLimit := limit
-	if probeOnly {
+	if scope != "all" {
 		queryLimit = limit * 4
 	}
 
@@ -248,7 +261,7 @@ func GetChannelHealthEvents(c *gin.Context) {
 			continue
 		}
 		eventType := stringFromHealthEvent(other["event_type"])
-		if probeOnly && !isChannelHealthProbeEvent(eventType) {
+		if !channelHealthEventMatchesScope(eventType, scope) {
 			continue
 		}
 		delete(other, "admin_info")
@@ -282,6 +295,7 @@ func GetChannelHealthEvents(c *gin.Context) {
 			"hours":       hours,
 			"limit":       limit,
 			"probe_only":  probeOnly,
+			"scope":       scope,
 			"window_from": since,
 		},
 	})
@@ -417,6 +431,22 @@ func getChannelHealthEventStats(window time.Duration) map[int]channelHealthEvent
 			stat.LastErrorType, _ = other["error_type"].(string)
 			stat.LastErrorCode, _ = other["error_code"].(string)
 		}
+		if isChannelHealthRequestEvent(eventType) && log.CreatedAt > stat.LastRequestEventAt {
+			stat.LastRequestEventAt = log.CreatedAt
+			stat.LastRequestEventType = eventType
+			stat.LastRequestEventMessage = log.Content
+			stat.LastRequestStatusCode = intFromHealthEvent(other["status_code"])
+			stat.LastRequestErrorType, _ = other["error_type"].(string)
+			stat.LastRequestErrorCode, _ = other["error_code"].(string)
+		}
+		if isChannelHealthProbeScopeEvent(eventType) && log.CreatedAt > stat.LastProbeEventAt {
+			stat.LastProbeEventAt = log.CreatedAt
+			stat.LastProbeEventType = eventType
+			stat.LastProbeEventMessage = log.Content
+			stat.LastProbeStatusCode = intFromHealthEvent(other["status_code"])
+			stat.LastProbeErrorType, _ = other["error_type"].(string)
+			stat.LastProbeErrorCode, _ = other["error_code"].(string)
+		}
 		result[log.ChannelId] = stat
 	}
 	return result
@@ -453,13 +483,55 @@ func stringFromHealthEvent(value interface{}) string {
 	}
 }
 
+func normalizeChannelHealthEventScope(raw string, probeOnly bool) string {
+	if probeOnly {
+		return "probe"
+	}
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "probe", "request", "all":
+		return strings.ToLower(strings.TrimSpace(raw))
+	default:
+		return "all"
+	}
+}
+
+func channelHealthEventMatchesScope(eventType string, scope string) bool {
+	switch scope {
+	case "probe":
+		return isChannelHealthProbeScopeEvent(eventType)
+	case "request":
+		return isChannelHealthRequestEvent(eventType)
+	default:
+		return true
+	}
+}
+
 func isChannelHealthProbeEvent(eventType string) bool {
 	return strings.HasPrefix(eventType, "probe_")
+}
+
+func isChannelHealthProbeScopeEvent(eventType string) bool {
+	return isChannelHealthProbeEvent(eventType) ||
+		eventType == service.ChannelHealthEventNewAPICooling ||
+		eventType == service.ChannelHealthEventManualRecovered
+}
+
+func isChannelHealthRequestEvent(eventType string) bool {
+	switch eventType {
+	case service.ChannelHealthEventFinalError,
+		service.ChannelHealthEventIntermediateFailover,
+		service.ChannelHealthEventProviderCooldown:
+		return true
+	default:
+		return false
+	}
 }
 
 func isChannelHealthCooldownEvent(eventType string) bool {
 	switch eventType {
 	case service.ChannelHealthEventNewAPICooling,
+		service.ChannelHealthEventProbeScanned,
+		service.ChannelHealthEventProbeSkipped,
 		service.ChannelHealthEventProbeWaiting,
 		service.ChannelHealthEventProbeStarted,
 		service.ChannelHealthEventProbeFailed,
