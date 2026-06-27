@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +50,8 @@ type ChannelCooldownStatus struct {
 	LastProbeAt            int64  `json:"last_probe_at"`
 	LastFailureAt          int64  `json:"last_failure_at"`
 	LastError              string `json:"last_error,omitempty"`
+	ActiveProbeEnabled     bool   `json:"active_probe_enabled"`
+	ActiveProbeMode        string `json:"active_probe_mode,omitempty"`
 }
 
 type channelCooldownProbeEvent struct {
@@ -60,6 +63,13 @@ type channelCooldownProbeEvent struct {
 	other       map[string]interface{}
 }
 
+type channelCooldownProbeJob struct {
+	channelId   int
+	channelName string
+	modelName   string
+	mode        string
+}
+
 var (
 	channelCooldownMu    sync.Mutex
 	channelCooldownLocal = map[int]channelCooldownEntry{}
@@ -67,6 +77,11 @@ var (
 
 const channelCooldownProbeRecentErrorWindow = time.Hour
 const channelCooldownProbeModel = "gpt-5.5"
+
+const (
+	channelProbeModeRecovery   = "cooldown_recovery"
+	channelProbeModeContinuous = "continuous_active"
+)
 
 func IsChannelCoolingDown(channelId int) bool {
 	if !common.AutomaticChannelCooldownEnabled || channelId <= 0 || common.ChannelCooldownSeconds <= 0 {
@@ -601,20 +616,84 @@ func shouldTrackChannelCooldownProbe(channelError types.ChannelError) bool {
 	if !supportsChannelCooldownProbe(channel.Type) {
 		return false
 	}
-	return channelSupportsActiveProbeGroup(channel)
+	enabled, _ := ChannelActiveProbeEligibility(channel)
+	return enabled
 }
 
-func channelSupportsActiveProbeGroup(channel *model.Channel) bool {
+func ChannelActiveProbeEligibility(channel *model.Channel) (bool, string) {
+	if channel == nil {
+		return false, ""
+	}
+	if channel.Status != common.ChannelStatusEnabled {
+		return false, ""
+	}
+	if !supportsChannelCooldownProbe(channel.Type) {
+		return false, ""
+	}
+	if channelHasManualActiveProbeEnabled(channel) {
+		return true, "manual"
+	}
+	if channelNameHasRateSuffix(channel.Name) {
+		return true, "rate_suffix"
+	}
+	return false, ""
+}
+
+func channelHasManualActiveProbeEnabled(channel *model.Channel) bool {
 	if channel == nil {
 		return false
 	}
-	for _, group := range channel.GetGroups() {
-		switch strings.ToLower(strings.TrimSpace(group)) {
-		case "plus", "pro":
-			return true
+	other := channel.GetOtherInfo()
+	for _, key := range []string{"active_probe_enabled", "channel_active_probe_enabled", "cooldown_active_probe_enabled"} {
+		value, ok := other[key]
+		if !ok {
+			continue
+		}
+		switch v := value.(type) {
+		case bool:
+			return v
+		case string:
+			return strings.EqualFold(strings.TrimSpace(v), "true") || strings.TrimSpace(v) == "1"
+		case float64:
+			return v == 1
+		case int:
+			return v == 1
 		}
 	}
 	return false
+}
+
+func channelNameHasRateSuffix(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	idx := strings.LastIndex(name, "-")
+	if idx < 0 || idx == len(name)-1 {
+		return false
+	}
+	suffix := strings.TrimSpace(name[idx+1:])
+	if suffix == "" {
+		return false
+	}
+	value, err := strconv.ParseFloat(suffix, 64)
+	if err != nil || value <= 0 {
+		return false
+	}
+	dotCount := 0
+	for _, r := range suffix {
+		if r == '.' {
+			dotCount++
+			if dotCount > 1 {
+				return false
+			}
+			continue
+		}
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func runDueChannelCooldownProbes() {
@@ -626,12 +705,7 @@ func runDueChannelCooldownProbes() {
 		interval = time.Minute
 	}
 	now := time.Now()
-	type probeJob struct {
-		channelId   int
-		channelName string
-		modelName   string
-	}
-	jobs := make([]probeJob, 0)
+	jobs := make([]channelCooldownProbeJob, 0)
 	events := make([]channelCooldownProbeEvent, 0)
 	channelCooldownMu.Lock()
 	for channelId, entry := range channelCooldownLocal {
@@ -682,10 +756,11 @@ func runDueChannelCooldownProbes() {
 			events = append(events, probeSkipEvent(channelId, entry.channelName, modelName, "channel_not_enabled", "渠道未启用，跳过主动探针"))
 			continue
 		}
-		if !channelSupportsActiveProbeGroup(channel) {
+		eligible, _ := ChannelActiveProbeEligibility(channel)
+		if !eligible {
 			entry.probeRequired = false
 			channelCooldownLocal[channelId] = entry
-			events = append(events, probeSkipEvent(channelId, entry.channelName, modelName, "group_not_in_probe_scope", "渠道不在 plus/pro 主动探针范围，跳过"))
+			events = append(events, probeSkipEvent(channelId, entry.channelName, modelName, "not_in_active_probe_scope", "渠道不在主动探针范围，跳过恢复探针"))
 			continue
 		}
 		if !supportsChannelCooldownProbe(channel.Type) {
@@ -698,16 +773,72 @@ func runDueChannelCooldownProbes() {
 		entry.lastProbeAt = now
 		entry.nextProbeAt = now.Add(interval)
 		channelCooldownLocal[channelId] = entry
-		jobs = append(jobs, probeJob{channelId: channelId, channelName: entry.channelName, modelName: entry.probeModel})
+		jobs = append(jobs, channelCooldownProbeJob{channelId: channelId, channelName: entry.channelName, modelName: entry.probeModel, mode: channelProbeModeRecovery})
 	}
 	channelCooldownMu.Unlock()
+	continuousJobs, continuousEvents := collectContinuousActiveProbeJobs(now, interval)
+	jobs = append(jobs, continuousJobs...)
+	events = append(events, continuousEvents...)
 	for _, event := range events {
 		RecordChannelCooldownHealthEvent(event.eventType, event.channelId, event.channelName, event.modelName, event.content, event.other)
 	}
 	for _, job := range jobs {
-		RecordChannelCooldownHealthEvent(ChannelHealthEventProbeStarted, job.channelId, job.channelName, job.modelName, "主动探针开始", nil)
-		go probeAndRecoverChannelCooldown(job.channelId, job.modelName)
+		content := "主动探针开始"
+		if job.mode == channelProbeModeContinuous {
+			content = "常规主动探针开始"
+		}
+		RecordChannelCooldownHealthEvent(ChannelHealthEventProbeStarted, job.channelId, job.channelName, job.modelName, content, map[string]interface{}{
+			"probe_mode": job.mode,
+		})
+		go probeAndRecoverChannelCooldown(job.channelId, job.channelName, job.modelName, job.mode)
 	}
+}
+
+func collectContinuousActiveProbeJobs(now time.Time, interval time.Duration) ([]channelCooldownProbeJob, []channelCooldownProbeEvent) {
+	jobs := make([]channelCooldownProbeJob, 0)
+	events := make([]channelCooldownProbeEvent, 0)
+	channels := make([]*model.Channel, 0)
+	if err := model.DB.Where("status = ?", common.ChannelStatusEnabled).Find(&channels).Error; err != nil {
+		common.SysError("failed to load continuous active probe channels: " + err.Error())
+		return nil, nil
+	}
+	for _, channel := range channels {
+		eligible, mode := ChannelActiveProbeEligibility(channel)
+		if !eligible {
+			continue
+		}
+		channelCooldownMu.Lock()
+		entry := channelCooldownLocal[channel.Id]
+		if entry.probing || entry.probeRequired || (!entry.coolUntil.IsZero() && now.Before(entry.coolUntil)) {
+			channelCooldownMu.Unlock()
+			continue
+		}
+		if !entry.nextProbeAt.IsZero() && now.Before(entry.nextProbeAt) {
+			channelCooldownMu.Unlock()
+			continue
+		}
+		entry.channelName = channel.Name
+		entry.probeModel = channelCooldownProbeModel
+		entry.probing = true
+		entry.lastProbeAt = now
+		entry.nextProbeAt = now.Add(interval)
+		channelCooldownLocal[channel.Id] = entry
+		channelCooldownMu.Unlock()
+		jobs = append(jobs, channelCooldownProbeJob{channelId: channel.Id, channelName: channel.Name, modelName: channelCooldownProbeModel, mode: channelProbeModeContinuous})
+		events = append(events, channelCooldownProbeEvent{
+			eventType:   ChannelHealthEventProbeScanned,
+			channelId:   channel.Id,
+			channelName: channel.Name,
+			modelName:   channelCooldownProbeModel,
+			content:     "主动探针扫描到持续探测渠道",
+			other: map[string]interface{}{
+				"active_probe_mode": mode,
+				"probe_mode":        channelProbeModeContinuous,
+				"next_probe_at":     now.Add(interval).Unix(),
+			},
+		})
+	}
+	return jobs, events
 }
 
 func probeSkipEvent(channelId int, channelName string, modelName string, reason string, content string) channelCooldownProbeEvent {
@@ -723,17 +854,37 @@ func probeSkipEvent(channelId int, channelName string, modelName string, reason 
 	}
 }
 
-func probeAndRecoverChannelCooldown(channelId int, modelName string) {
+func probeAndRecoverChannelCooldown(channelId int, channelName string, modelName string, mode string) {
 	timeout := time.Duration(common.ChannelCooldownProbeTimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = time.Minute
 	}
 	err := probeChannelCooldown(channelId, modelName, timeout)
 	if err == nil {
-		channelName := getChannelCooldownEntryName(channelId)
-		RecordChannelCooldownHealthEvent(ChannelHealthEventProbeSucceeded, channelId, channelName, modelName, "主动探针通过，渠道恢复调度", nil)
-		ClearChannelCooldown(channelId)
-		common.SysLog(fmt.Sprintf("通道 #%d 冷却主动探测通过，已恢复调度", channelId))
+		recovered := markChannelProbeSucceeded(channelId, channelName)
+		content := "常规主动探针通过"
+		if recovered {
+			content = "主动探针通过，渠道恢复调度"
+		}
+		RecordChannelCooldownHealthEvent(ChannelHealthEventProbeSucceeded, channelId, channelName, modelName, content, map[string]interface{}{
+			"probe_mode": mode,
+			"recovered":  recovered,
+		})
+		if recovered {
+			common.SysLog(fmt.Sprintf("通道 #%d 冷却主动探测通过，已恢复调度", channelId))
+		}
+		return
+	}
+	if mode == channelProbeModeContinuous {
+		markChannelCoolingFromActiveProbeFailure(channelId, channelName, modelName, err)
+		RecordChannelCooldownHealthEvent(ChannelHealthEventNewAPICooling, channelId, channelName, modelName, "常规主动探针失败，进入 NewAPI 渠道冷却", map[string]interface{}{
+			"probe_mode":       mode,
+			"cooldown_seconds": common.ChannelCooldownSeconds,
+		})
+		RecordChannelCooldownHealthEvent(ChannelHealthEventProbeFailed, channelId, channelName, modelName, err.Error(), map[string]interface{}{
+			"probe_mode": mode,
+		})
+		common.SysLog(fmt.Sprintf("通道 #%d 常规主动探测未通过，已进入冷却: %s", channelId, err.Error()))
 		return
 	}
 	channelCooldownMu.Lock()
@@ -750,14 +901,56 @@ func probeAndRecoverChannelCooldown(channelId int, modelName string) {
 	}
 	channelCooldownLocal[channelId] = entry
 	channelCooldownMu.Unlock()
-	RecordChannelCooldownHealthEvent(ChannelHealthEventProbeFailed, channelId, entry.channelName, modelName, err.Error(), nil)
+	RecordChannelCooldownHealthEvent(ChannelHealthEventProbeFailed, channelId, entry.channelName, modelName, err.Error(), map[string]interface{}{
+		"probe_mode": mode,
+	})
 	common.SysLog(fmt.Sprintf("通道 #%d 冷却主动探测未通过: %s", channelId, err.Error()))
 }
 
-func getChannelCooldownEntryName(channelId int) string {
+func markChannelProbeSucceeded(channelId int, channelName string) bool {
 	channelCooldownMu.Lock()
 	defer channelCooldownMu.Unlock()
-	return channelCooldownLocal[channelId].channelName
+	entry, ok := channelCooldownLocal[channelId]
+	if !ok {
+		return false
+	}
+	recovered := entry.probeRequired || !entry.coolUntil.IsZero()
+	if recovered {
+		delete(channelCooldownLocal, channelId)
+		return true
+	}
+	entry.channelName = channelName
+	entry.probing = false
+	entry.lastError = ""
+	channelCooldownLocal[channelId] = entry
+	return false
+}
+
+func markChannelCoolingFromActiveProbeFailure(channelId int, channelName string, modelName string, err error) {
+	now := time.Now()
+	cooldown := time.Duration(common.ChannelCooldownSeconds) * time.Second
+	if cooldown <= 0 {
+		cooldown = 5 * time.Minute
+	}
+	interval := time.Duration(common.ChannelCooldownProbeIntervalSeconds) * time.Second
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	channelCooldownMu.Lock()
+	entry := channelCooldownLocal[channelId]
+	entry.channelName = channelName
+	entry.probeModel = channelCooldownProbeModel
+	if strings.TrimSpace(modelName) != "" {
+		entry.probeModel = modelName
+	}
+	entry.coolUntil = now.Add(cooldown)
+	entry.probeRequired = true
+	entry.probing = false
+	entry.lastFailureAt = now
+	entry.lastError = err.Error()
+	entry.nextProbeAt = now.Add(interval)
+	channelCooldownLocal[channelId] = entry
+	channelCooldownMu.Unlock()
 }
 
 func ClearChannelCooldown(channelId int) {

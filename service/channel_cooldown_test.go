@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/stretchr/testify/require"
@@ -670,12 +671,47 @@ func TestTransientSlowUpstreamBadRequestTriggersChannelCooldown(t *testing.T) {
 	require.True(t, IsChannelCoolingDown(32))
 }
 
-func TestChannelSupportsActiveProbeGroup(t *testing.T) {
-	require.True(t, channelSupportsActiveProbeGroup(&model.Channel{Group: "default, plus"}))
-	require.True(t, channelSupportsActiveProbeGroup(&model.Channel{Group: "pro"}))
-	require.True(t, channelSupportsActiveProbeGroup(&model.Channel{Group: "PRO"}))
-	require.False(t, channelSupportsActiveProbeGroup(&model.Channel{Group: "default"}))
-	require.False(t, channelSupportsActiveProbeGroup(nil))
+func TestChannelActiveProbeEligibility(t *testing.T) {
+	eligible, mode := ChannelActiveProbeEligibility(&model.Channel{
+		Name:   "api.example.com-plus-0.069",
+		Status: common.ChannelStatusEnabled,
+		Type:   constant.ChannelTypeOpenAI,
+	})
+	require.True(t, eligible)
+	require.Equal(t, "rate_suffix", mode)
+
+	eligible, mode = ChannelActiveProbeEligibility(&model.Channel{
+		Name:   "api.example.com-plus",
+		Status: common.ChannelStatusEnabled,
+		Type:   constant.ChannelTypeOpenAI,
+	})
+	require.False(t, eligible)
+	require.Empty(t, mode)
+
+	eligible, mode = ChannelActiveProbeEligibility(&model.Channel{
+		Name:      "api.example.com-plus",
+		Status:    common.ChannelStatusEnabled,
+		Type:      constant.ChannelTypeOpenAI,
+		OtherInfo: `{"active_probe_enabled":true}`,
+	})
+	require.True(t, eligible)
+	require.Equal(t, "manual", mode)
+
+	eligible, mode = ChannelActiveProbeEligibility(&model.Channel{
+		Name:   "api.example.com-plus-0.a",
+		Status: common.ChannelStatusEnabled,
+		Type:   constant.ChannelTypeOpenAI,
+	})
+	require.False(t, eligible)
+	require.Empty(t, mode)
+
+	eligible, mode = ChannelActiveProbeEligibility(&model.Channel{
+		Name:   "api.example.com-plus-0.069",
+		Status: common.ChannelStatusManuallyDisabled,
+		Type:   constant.ChannelTypeOpenAI,
+	})
+	require.False(t, eligible)
+	require.Empty(t, mode)
 }
 
 func TestResolveCooldownProbeModelAlwaysUsesGPT55(t *testing.T) {

@@ -160,7 +160,7 @@ function getEventScopeDescription(scope) {
     return '这里仅显示最终请求错误、中间渠道失败但已 failover 成功、上游/provider 凭证池限流等用户请求链路事件。用户额度不足属于请求错误历史，不代表探针失败，也不代表渠道当前冷却。';
   }
   if (scope === 'probe') {
-    return '这里仅显示主动探针、NewAPI 渠道冷却和手动恢复历史。探针失败或探针 60s 内没有返回有效流内容时会保持 NewAPI 冷却；手动恢复只清冷却状态，不修改渠道启用/禁用状态。';
+    return '这里仅显示主动探针、NewAPI 渠道冷却和手动恢复历史。倍率后缀或手动开启主动探针的渠道会每分钟持续探测；探针失败或探针 60s 内没有返回有效流内容时会进入/保持 NewAPI 冷却，通过后恢复调度。';
   }
   return '这里显示最近 7 天的渠道健康事件。';
 }
@@ -686,6 +686,34 @@ const ChannelHealth = () => {
       width: 220,
       render: (cooldown) => {
         if (!cooldown?.cooling_down && !cooldown?.probe_required) {
+          if (cooldown?.active_probe_enabled) {
+            return (
+              <div className='space-y-1'>
+                <Tag color='green' shape='circle'>
+                  {t('主动探针开启')}
+                </Tag>
+                <div>
+                  <Text size='small' type='tertiary'>
+                    {t('范围')} {cooldown.active_probe_mode || '-'}
+                  </Text>
+                </div>
+                {cooldown.last_probe_at ? (
+                  <div>
+                    <Text size='small' type='tertiary'>
+                      {t('最后探针')} {formatTime(cooldown.last_probe_at)}
+                    </Text>
+                  </div>
+                ) : null}
+                {cooldown.next_probe_at ? (
+                  <div>
+                    <Text size='small' type='tertiary'>
+                      {t('下次探针')} {formatTime(cooldown.next_probe_at)}
+                    </Text>
+                  </div>
+                ) : null}
+              </div>
+            );
+          }
           return <Text type='tertiary'>{t('当前未冷却，未等待探针')}</Text>;
         }
         let probeLabel = t('探针等待');
@@ -936,7 +964,7 @@ const ChannelHealth = () => {
         closeIcon={null}
         className='mb-3'
         description={t(
-          '只有“当前冷却”状态和“当前冷却/探针”列表示渠道现在被 NewAPI 冷却或等待恢复探针；主动探针失败或 60s 内没有返回有效流内容会继续冷却并等待下一次恢复探针。普通用户请求的 SSE/Responses 断流只记录健康事件和 failover，不进入 NewAPI 冷却。页面读取不消耗上游额度，只有手动“立即测试”和冷却主动探针会发起少量真实请求；“恢复冷却”只清 NewAPI 冷却，不会启用管理员禁用的渠道。',
+          '只有“当前冷却”状态和“当前冷却/探针”列表示渠道现在被 NewAPI 冷却或等待恢复探针；名称后缀带倍率或手动开启 active_probe_enabled=true 的启用渠道会每分钟持续主动探测。主动探针失败或 60s 内没有返回有效流内容会进入/保持 NewAPI 冷却，后续探针通过后恢复调度。普通用户请求的 SSE/Responses 断流只记录健康事件和 failover，不进入 NewAPI 冷却。页面读取不消耗上游额度，手动“立即测试”和主动探针会发起少量真实请求；“恢复冷却”只清 NewAPI 冷却，不会启用管理员禁用的渠道。',
         )}
       />
 
@@ -1154,7 +1182,8 @@ const ChannelHealth = () => {
             / {settings.channel_cooldown_failure_window || '-'}s,{' '}
             {t('冷却时长')} {settings.channel_cooldown_seconds || '-'}s,{' '}
             {t('探针')}{' '}
-            {settings.channel_cooldown_probe_enabled ? t('开启') : t('关闭')}
+            {settings.channel_cooldown_probe_enabled ? t('开启') : t('关闭')},{' '}
+            {t('范围')} {settings.channel_cooldown_probe_scope || '-'}
           </Text>
         </div>
       </Card>

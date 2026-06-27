@@ -149,6 +149,10 @@ func GetChannelHealth(c *gin.Context) {
 		if cooldown.ChannelID == 0 {
 			cooldown.ChannelID = channel.Id
 		}
+		if activeProbeEnabled, activeProbeMode := service.ChannelActiveProbeEligibility(channel); activeProbeEnabled {
+			cooldown.ActiveProbeEnabled = true
+			cooldown.ActiveProbeMode = activeProbeMode
+		}
 		recent := recentStats[channel.Id]
 		events := eventStats[channel.Id]
 		errorRate := 0.0
@@ -210,8 +214,9 @@ func GetChannelHealth(c *gin.Context) {
 			"automatic_disable_channel_enabled":      common.AutomaticDisableChannelEnabled,
 			"automatic_enable_channel_enabled":       common.AutomaticEnableChannelEnabled,
 			"channel_disable_threshold_seconds":      common.ChannelDisableThreshold,
-			"channel_cooldown_probe_scope":           "enabled plus/pro channels with recent errors",
+			"channel_cooldown_probe_scope":           "enabled channels with numeric rate suffix or explicit active_probe_enabled=true",
 			"channel_cooldown_probe_recent_window":   int64((time.Hour).Seconds()),
+			"channel_cooldown_continuous_probe":      true,
 			"health_recent_window_seconds":           int64((24 * time.Hour).Seconds()),
 			"page_load_consumes_upstream_quota":      false,
 			"manual_test_consumes_upstream_quota":    true,
