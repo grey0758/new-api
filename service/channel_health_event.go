@@ -23,6 +23,7 @@ const (
 	ChannelHealthEventProbeStarted         = "probe_started"
 	ChannelHealthEventProbeFailed          = "probe_failed"
 	ChannelHealthEventProbeSucceeded       = "probe_succeeded"
+	ChannelHealthEventManualRecovered      = "manual_recovered"
 )
 
 type ChannelHealthEventParams struct {

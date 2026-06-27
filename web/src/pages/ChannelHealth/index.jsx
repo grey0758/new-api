@@ -94,8 +94,28 @@ function getEventLabel(eventType) {
     probe_started: '探针中',
     probe_failed: '探针失败',
     probe_succeeded: '探针成功',
+    manual_recovered: '手动恢复冷却',
   };
   return labels[eventType] || eventType || '-';
+}
+
+function getEventColor(eventType) {
+  if (eventType === 'probe_succeeded' || eventType === 'manual_recovered') {
+    return 'green';
+  }
+  if (eventType === 'probe_failed' || eventType === 'final_error') {
+    return 'red';
+  }
+  if (eventType === 'probe_started' || eventType === 'probe_scanned') {
+    return 'blue';
+  }
+  if (eventType === 'probe_skipped' || eventType === 'probe_waiting') {
+    return 'grey';
+  }
+  if (eventType === 'newapi_channel_cooling') {
+    return 'yellow';
+  }
+  return 'orange';
 }
 
 function getHealthEventErrorCount(events = {}) {
@@ -143,6 +163,11 @@ const ChannelHealth = () => {
   const [settings, setSettings] = useState({});
   const [loading, setLoading] = useState(false);
   const [testingId, setTestingId] = useState(null);
+  const [recoveringId, setRecoveringId] = useState(null);
+  const [eventModalVisible, setEventModalVisible] = useState(false);
+  const [eventLoading, setEventLoading] = useState(false);
+  const [eventRecord, setEventRecord] = useState(null);
+  const [eventItems, setEventItems] = useState([]);
   const [keyword, setKeyword] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
 
@@ -221,6 +246,7 @@ const ChannelHealth = () => {
       { type: t('探针中'), value: summary?.probe_started || 0 },
       { type: t('探针失败'), value: summary?.probe_failed || 0 },
       { type: t('探针成功'), value: summary?.probe_succeeded || 0 },
+      { type: t('手动恢复'), value: summary?.manual_recovered || 0 },
     ],
     [summary, t],
   );
@@ -339,11 +365,63 @@ const ChannelHealth = () => {
           [t('探针中')]: '#4aa3df',
           [t('探针失败')]: '#c0392b',
           [t('探针成功')]: '#2ca02c',
+          [t('手动恢复')]: '#2ca02c',
         },
       },
     }),
     [eventChartData, t],
   );
+
+  const openProbeHistory = async (record) => {
+    setEventRecord(record);
+    setEventModalVisible(true);
+    setEventLoading(true);
+    try {
+      const res = await API.get(
+        `/api/channel/health/${record.id}/events?hours=168&limit=200&probe_only=false`,
+        { disableDuplicate: true },
+      );
+      const { success, message, data } = res.data || {};
+      if (!success) {
+        showError(message || t('获取探针历史失败'));
+        return;
+      }
+      setEventItems(data?.items || []);
+    } finally {
+      setEventLoading(false);
+    }
+  };
+
+  const recoverCooldown = (record) => {
+    Modal.confirm({
+      title: t('手动恢复 NewAPI 冷却？'),
+      content: t(
+        '该操作只清除 NewAPI 渠道冷却和等待探针状态，不会启用被管理员禁用或自动禁用的渠道，也不会修改渠道配置。恢复后后续请求会重新参与正常调度。',
+      ),
+      onOk: async () => {
+        setRecoveringId(record.id);
+        try {
+          const res = await API.post(
+            `/api/channel/health/${record.id}/cooldown/recover`,
+            {},
+            { disableDuplicate: true },
+          );
+          const { success, message } = res.data || {};
+          if (!success) {
+            showError(message || t('恢复冷却失败'));
+            return;
+          }
+          showSuccess(t('已清除该渠道的 NewAPI 冷却/探针状态'));
+          await loadHealth();
+          if (eventModalVisible && eventRecord?.id === record.id) {
+            await openProbeHistory(record);
+          }
+        } finally {
+          setRecoveringId(null);
+        }
+      },
+    });
+  };
 
   const runChannelTest = (record) => {
     Modal.confirm({
@@ -464,7 +542,8 @@ const ChannelHealth = () => {
           !events?.probe_scanned &&
           !events?.probe_skipped &&
           !events?.probe_started &&
-          !events?.probe_succeeded
+          !events?.probe_succeeded &&
+          !events?.manual_recovered
         ) {
           return <Text type='tertiary'>{t('无事件')}</Text>;
         }
@@ -519,6 +598,11 @@ const ChannelHealth = () => {
               {events?.probe_succeeded ? (
                 <Tag color='green' size='small'>
                   {t('探针成功')} {events.probe_succeeded}
+                </Tag>
+              ) : null}
+              {events?.manual_recovered ? (
+                <Tag color='green' size='small'>
+                  {t('手动恢复')} {events.manual_recovered}
                 </Tag>
               ) : null}
             </Space>
@@ -638,18 +722,121 @@ const ChannelHealth = () => {
       title: t('操作'),
       dataIndex: 'operate',
       fixed: 'right',
-      width: 130,
-      render: (_, record) => (
-        <Button
-          size='small'
-          type='tertiary'
-          icon={<Play size={14} />}
-          loading={testingId === record.id}
-          onClick={() => runChannelTest(record)}
-        >
-          {t('立即测试')}
-        </Button>
+      width: 280,
+      render: (_, record) => {
+        const cooldown = record?.cooldown || {};
+        const canRecover =
+          cooldown.cooling_down ||
+          cooldown.probe_required ||
+          cooldown.probing ||
+          (cooldown.failure_count || 0) > 0;
+        return (
+          <Space wrap spacing={4}>
+            <Button
+              size='small'
+              type='tertiary'
+              icon={<Clock3 size={14} />}
+              onClick={() => openProbeHistory(record)}
+            >
+              {t('探针历史')}
+            </Button>
+            {canRecover ? (
+              <Button
+                size='small'
+                type='warning'
+                theme='light'
+                icon={<RefreshCw size={14} />}
+                loading={recoveringId === record.id}
+                onClick={() => recoverCooldown(record)}
+              >
+                {t('恢复冷却')}
+              </Button>
+            ) : null}
+            <Button
+              size='small'
+              type='tertiary'
+              icon={<Play size={14} />}
+              loading={testingId === record.id}
+              onClick={() => runChannelTest(record)}
+            >
+              {t('立即测试')}
+            </Button>
+          </Space>
+        );
+      },
+    },
+  ];
+
+  const eventColumns = [
+    {
+      title: t('时间'),
+      dataIndex: 'created_at',
+      width: 170,
+      render: (value) => formatTime(value),
+    },
+    {
+      title: t('类型'),
+      dataIndex: 'event_type',
+      width: 150,
+      render: (value) => (
+        <Tag color={getEventColor(value)} size='small'>
+          {t(getEventLabel(value))}
+        </Tag>
       ),
+    },
+    {
+      title: t('模型'),
+      dataIndex: 'model_name',
+      width: 130,
+      render: (value) => value || '-',
+    },
+    {
+      title: t('状态码/错误'),
+      dataIndex: 'status_code',
+      width: 150,
+      render: (_, record) => (
+        <div className='space-y-1'>
+          <Text size='small'>{record.status_code || '-'}</Text>
+          <Text type='tertiary' size='small' ellipsis={{ showTooltip: true }}>
+            {[record.error_type, record.error_code].filter(Boolean).join(' / ') || '-'}
+          </Text>
+        </div>
+      ),
+    },
+    {
+      title: t('内容'),
+      dataIndex: 'content',
+      width: 280,
+      render: (value) => (
+        <Text size='small' ellipsis={{ showTooltip: true }}>
+          {value || '-'}
+        </Text>
+      ),
+    },
+    {
+      title: t('细节'),
+      dataIndex: 'other',
+      width: 360,
+      render: (other) => {
+        const detail = other || {};
+        const preferredKeys = [
+          'skip_reason',
+          'cooldown_ttl_seconds',
+          'next_probe_at',
+          'last_failure_at',
+          'probe_model',
+          'manual_recovery_scope',
+          'admin_disable_untouched',
+        ];
+        const visible = preferredKeys
+          .filter((key) => detail[key] !== undefined && detail[key] !== '')
+          .map((key) => `${key}=${detail[key]}`);
+        return (
+          <Text size='small' ellipsis={{ showTooltip: true }}>
+            {visible.length ? visible.join(', ') : JSON.stringify(detail)}
+          </Text>
+        );
+      },
     },
   ];
 
@@ -680,7 +867,7 @@ const ChannelHealth = () => {
         closeIcon={null}
         className='mb-3'
         description={t(
-          '只有“当前冷却”状态和“当前冷却/探针”列表示渠道现在被 NewAPI 冷却或等待恢复探针；“历史异常”“历史上游限流”“曾NewAPI冷却”都是近24h历史记录，不代表当前仍在冷却。页面读取不消耗上游额度，只有手动“立即测试”和冷却主动探针会发起上游请求。',
+          '只有“当前冷却”状态和“当前冷却/探针”列表示渠道现在被 NewAPI 冷却或等待恢复探针；主动探针失败或 60s 内没有返回有效流内容会继续冷却并等待下一次恢复探针。普通用户请求的 SSE/Responses 断流只记录健康事件和 failover，不进入 NewAPI 冷却。页面读取不消耗上游额度，只有手动“立即测试”和冷却主动探针会发起少量真实请求；“恢复冷却”只清 NewAPI 冷却，不会启用管理员禁用的渠道。',
         )}
       />
 
@@ -914,10 +1101,40 @@ const ChannelHealth = () => {
             formatPageText: (page) =>
               `${t('第')} ${page.currentStart} - ${page.currentEnd} ${t('条，共')} ${page.total} ${t('条')}`,
           }}
-          scroll={{ x: 1460 }}
+          scroll={{ x: 1610 }}
           size='middle'
         />
       </Spin>
+
+      <Modal
+        title={
+          eventRecord
+            ? `${t('探针/健康事件历史')} #${eventRecord.id} ${eventRecord.name}`
+            : t('探针/健康事件历史')
+        }
+        visible={eventModalVisible}
+        footer={null}
+        width={1120}
+        onCancel={() => setEventModalVisible(false)}
+      >
+        <Banner
+          type='info'
+          closeIcon={null}
+          className='mb-3'
+          description={t(
+            '这里显示最近 7 天的主动探针、冷却和相关健康事件。探针失败或探针 60s 内没有返回有效流内容时会保持 NewAPI 冷却；手动恢复只清冷却状态，不修改渠道启用/禁用状态。',
+          )}
+        />
+        <Table
+          rowKey='id'
+          columns={eventColumns}
+          dataSource={eventItems}
+          loading={eventLoading}
+          pagination={{ pageSize: 10 }}
+          scroll={{ x: 1240 }}
+          size='small'
+        />
+      </Modal>
     </div>
   );
 };

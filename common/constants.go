@@ -113,7 +113,7 @@ var ChannelCooldownFailureWindowSeconds = 120
 var ChannelCooldownSeconds = 300
 var ChannelCooldownProbeEnabled = true
 var ChannelCooldownProbeIntervalSeconds = 60
-var ChannelCooldownProbeTimeoutSeconds = 90
+var ChannelCooldownProbeTimeoutSeconds = 60
 var QuotaRemindThreshold = 1000
 var PreConsumedQuota = 500
 

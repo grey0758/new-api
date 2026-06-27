@@ -131,6 +131,9 @@ func shouldRecordChannelFailureForCooldown(channelError types.ChannelError, err 
 	if types.IsSkipRetryError(err) {
 		return false
 	}
+	if IsResponsesStreamIncompleteError(err) {
+		return false
+	}
 	if IsClientRequestValidationError(err) {
 		return false
 	}
@@ -723,7 +726,7 @@ func probeSkipEvent(channelId int, channelName string, modelName string, reason 
 func probeAndRecoverChannelCooldown(channelId int, modelName string) {
 	timeout := time.Duration(common.ChannelCooldownProbeTimeoutSeconds) * time.Second
 	if timeout <= 0 {
-		timeout = 90 * time.Second
+		timeout = time.Minute
 	}
 	err := probeChannelCooldown(channelId, modelName, timeout)
 	if err == nil {
@@ -768,6 +771,16 @@ func ClearChannelCooldown(channelId int) {
 		ctx := context.Background()
 		_ = common.RDB.Del(ctx, channelCooldownKey(channelId), channelCooldownFailureKey(channelId), channelCooldownActorsKey(channelId)).Err()
 	}
+}
+
+func RecoverChannelCooldown(channelId int) ChannelCooldownStatus {
+	statuses := GetChannelCooldownStatuses([]int{channelId})
+	status := statuses[channelId]
+	if status.ChannelID == 0 {
+		status.ChannelID = channelId
+	}
+	ClearChannelCooldown(channelId)
+	return status
 }
 
 func GetChannelCooldownStatuses(channelIds []int) map[int]ChannelCooldownStatus {

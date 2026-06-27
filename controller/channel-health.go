@@ -3,6 +3,8 @@ package controller
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -32,6 +34,7 @@ type channelHealthEventStat struct {
 	ProbeStarted        int64  `json:"probe_started"`
 	ProbeFailed         int64  `json:"probe_failed"`
 	ProbeSucceeded      int64  `json:"probe_succeeded"`
+	ManualRecovered     int64  `json:"manual_recovered"`
 	LastEventAt         int64  `json:"last_event_at"`
 	LastEventType       string `json:"last_event_type"`
 	LastEventMessage    string `json:"last_event_message"`
@@ -62,6 +65,25 @@ type channelHealthItem struct {
 	Recent             channelHealthLogStat          `json:"recent"`
 	Events             channelHealthEventStat        `json:"events"`
 	Cooldown           service.ChannelCooldownStatus `json:"cooldown"`
+}
+
+type channelHealthEventItem struct {
+	ID            int                    `json:"id"`
+	CreatedAt     int64                  `json:"created_at"`
+	EventType     string                 `json:"event_type"`
+	Content       string                 `json:"content"`
+	ModelName     string                 `json:"model_name"`
+	Group         string                 `json:"group"`
+	RequestID     string                 `json:"request_id"`
+	StatusCode    int                    `json:"status_code"`
+	ErrorType     string                 `json:"error_type"`
+	ErrorCode     string                 `json:"error_code"`
+	ChannelID     int                    `json:"channel_id"`
+	TokenID       int                    `json:"token_id"`
+	TokenName     string                 `json:"token_name"`
+	Other         map[string]interface{} `json:"other"`
+	ProbeEvent    bool                   `json:"probe_event"`
+	CooldownEvent bool                   `json:"cooldown_event"`
 }
 
 func GetChannelHealth(c *gin.Context) {
@@ -102,6 +124,7 @@ func GetChannelHealth(c *gin.Context) {
 		"probe_started":         int64(0),
 		"probe_failed":          int64(0),
 		"probe_succeeded":       int64(0),
+		"manual_recovered":      int64(0),
 		"recent_problem_events": int64(0),
 		"window_seconds":        int64((24 * time.Hour).Seconds()),
 		"passive_tracking":      true,
@@ -134,6 +157,7 @@ func GetChannelHealth(c *gin.Context) {
 		summary["probe_started"] = summary["probe_started"].(int64) + events.ProbeStarted
 		summary["probe_failed"] = summary["probe_failed"].(int64) + events.ProbeFailed
 		summary["probe_succeeded"] = summary["probe_succeeded"].(int64) + events.ProbeSucceeded
+		summary["manual_recovered"] = summary["manual_recovered"].(int64) + events.ManualRecovered
 		summary["recent_problem_events"] = summary["recent_problem_events"].(int64) + events.RecentProblemEvents
 
 		items = append(items, channelHealthItem{
@@ -181,6 +205,125 @@ func GetChannelHealth(c *gin.Context) {
 			"manual_test_consumes_upstream_quota":    true,
 			"cooldown_probe_consumes_upstream_quota": true,
 		},
+	})
+}
+
+func GetChannelHealthEvents(c *gin.Context) {
+	channelID, err := strconv.Atoi(c.Param("id"))
+	if err != nil || channelID <= 0 {
+		common.ApiErrorMsg(c, "无效的渠道ID")
+		return
+	}
+	limit := parseBoundedPositiveInt(c.Query("limit"), 100, 500)
+	hours := parseBoundedPositiveInt(c.Query("hours"), 24, 168)
+	probeOnly := strings.EqualFold(c.DefaultQuery("probe_only", "false"), "true")
+	since := common.GetTimestamp() - int64(hours)*3600
+	queryLimit := limit
+	if probeOnly {
+		queryLimit = limit * 4
+	}
+
+	logs := make([]*model.Log, 0)
+	err = model.LOG_DB.Model(&model.Log{}).
+		Where("channel_id = ? AND created_at >= ? AND type = ? AND other LIKE ?", channelID, since, model.LogTypeSystem, "%\"health_event\":true%").
+		Order("id desc").
+		Limit(queryLimit).
+		Find(&logs).Error
+	if err != nil {
+		common.SysError("failed to get channel health event details: " + err.Error())
+		common.ApiErrorMsg(c, "获取渠道健康事件失败")
+		return
+	}
+
+	items := make([]channelHealthEventItem, 0, len(logs))
+	for _, log := range logs {
+		if log == nil {
+			continue
+		}
+		other := map[string]interface{}{}
+		if err := json.Unmarshal([]byte(log.Other), &other); err != nil {
+			continue
+		}
+		if healthy, _ := other["health_event"].(bool); !healthy {
+			continue
+		}
+		eventType := stringFromHealthEvent(other["event_type"])
+		if probeOnly && !isChannelHealthProbeEvent(eventType) {
+			continue
+		}
+		delete(other, "admin_info")
+		items = append(items, channelHealthEventItem{
+			ID:            log.Id,
+			CreatedAt:     log.CreatedAt,
+			EventType:     eventType,
+			Content:       log.Content,
+			ModelName:     log.ModelName,
+			Group:         log.Group,
+			RequestID:     log.RequestId,
+			StatusCode:    intFromHealthEvent(other["status_code"]),
+			ErrorType:     stringFromHealthEvent(other["error_type"]),
+			ErrorCode:     stringFromHealthEvent(other["error_code"]),
+			ChannelID:     log.ChannelId,
+			TokenID:       log.TokenId,
+			TokenName:     log.TokenName,
+			Other:         other,
+			ProbeEvent:    isChannelHealthProbeEvent(eventType),
+			CooldownEvent: isChannelHealthCooldownEvent(eventType),
+		})
+		if len(items) >= limit {
+			break
+		}
+	}
+
+	common.ApiSuccess(c, gin.H{
+		"items": items,
+		"meta": gin.H{
+			"channel_id":  channelID,
+			"hours":       hours,
+			"limit":       limit,
+			"probe_only":  probeOnly,
+			"window_from": since,
+		},
+	})
+}
+
+func RecoverChannelHealthCooldown(c *gin.Context) {
+	channelID, err := strconv.Atoi(c.Param("id"))
+	if err != nil || channelID <= 0 {
+		common.ApiErrorMsg(c, "无效的渠道ID")
+		return
+	}
+	channel, err := model.GetChannelById(channelID, false)
+	if err != nil {
+		common.ApiErrorMsg(c, "渠道不存在")
+		return
+	}
+	previous := service.RecoverChannelCooldown(channelID)
+	service.RecordChannelCooldownHealthEvent(
+		service.ChannelHealthEventManualRecovered,
+		channelID,
+		channel.Name,
+		previous.ProbeModel,
+		"管理员手动清除 NewAPI 渠道冷却/探针状态",
+		map[string]interface{}{
+			"cooling_down_before":         previous.CoolingDown,
+			"probe_required_before":       previous.ProbeRequired,
+			"probing_before":              previous.Probing,
+			"failure_count_before":        previous.FailureCount,
+			"cooldown_ttl_seconds_before": previous.CooldownTTLSeconds,
+			"last_error_before":           previous.LastError,
+			"manual_recovery_scope":       "newapi_channel_cooldown",
+			"admin_disable_untouched":     true,
+			"channel_status":              channel.Status,
+		},
+	)
+
+	common.ApiSuccess(c, gin.H{
+		"channel_id":              channelID,
+		"previous":                previous,
+		"affected_scope":          "newapi_channel_cooldown",
+		"admin_disable_untouched": true,
+		"channel_status":          channel.Status,
 	})
 }
 
@@ -261,6 +404,8 @@ func getChannelHealthEventStats(window time.Duration) map[int]channelHealthEvent
 			stat.RecentProblemEvents++
 		case service.ChannelHealthEventProbeSucceeded:
 			stat.ProbeSucceeded++
+		case service.ChannelHealthEventManualRecovered:
+			stat.ManualRecovered++
 		default:
 			continue
 		}
@@ -277,6 +422,17 @@ func getChannelHealthEventStats(window time.Duration) map[int]channelHealthEvent
 	return result
 }
 
+func parseBoundedPositiveInt(raw string, fallback int, maxValue int) int {
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	if maxValue > 0 && value > maxValue {
+		return maxValue
+	}
+	return value
+}
+
 func intFromHealthEvent(value interface{}) int {
 	switch v := value.(type) {
 	case float64:
@@ -285,6 +441,33 @@ func intFromHealthEvent(value interface{}) int {
 		return v
 	default:
 		return 0
+	}
+}
+
+func stringFromHealthEvent(value interface{}) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	default:
+		return ""
+	}
+}
+
+func isChannelHealthProbeEvent(eventType string) bool {
+	return strings.HasPrefix(eventType, "probe_")
+}
+
+func isChannelHealthCooldownEvent(eventType string) bool {
+	switch eventType {
+	case service.ChannelHealthEventNewAPICooling,
+		service.ChannelHealthEventProbeWaiting,
+		service.ChannelHealthEventProbeStarted,
+		service.ChannelHealthEventProbeFailed,
+		service.ChannelHealthEventProbeSucceeded,
+		service.ChannelHealthEventManualRecovered:
+		return true
+	default:
+		return false
 	}
 }
 

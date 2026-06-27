@@ -140,6 +140,40 @@ func TestClientRequestValidationErrorDoesNotTriggerChannelCooldown(t *testing.T)
 	require.False(t, IsChannelCoolingDown(35))
 }
 
+func TestResponsesStreamIncompleteDoesNotTriggerChannelCooldown(t *testing.T) {
+	originalEnabled := common.AutomaticChannelCooldownEnabled
+	originalRedisEnabled := common.RedisEnabled
+	originalThreshold := common.ChannelCooldownFailureThreshold
+	originalWindow := common.ChannelCooldownFailureWindowSeconds
+	originalCooldown := common.ChannelCooldownSeconds
+	t.Cleanup(func() {
+		common.AutomaticChannelCooldownEnabled = originalEnabled
+		common.RedisEnabled = originalRedisEnabled
+		common.ChannelCooldownFailureThreshold = originalThreshold
+		common.ChannelCooldownFailureWindowSeconds = originalWindow
+		common.ChannelCooldownSeconds = originalCooldown
+		channelCooldownMu.Lock()
+		channelCooldownLocal = map[int]channelCooldownEntry{}
+		channelCooldownMu.Unlock()
+	})
+
+	common.AutomaticChannelCooldownEnabled = true
+	common.RedisEnabled = false
+	common.ChannelCooldownFailureThreshold = 1
+	common.ChannelCooldownFailureWindowSeconds = 60
+	common.ChannelCooldownSeconds = 60
+	channelError := *types.NewChannelError(36, 1, "sse-channel", false, "", true)
+	upstreamErr := types.NewOpenAIError(
+		errors.New("responses stream closed before response.completed: end=reason=timeout received=0 sent=0"),
+		types.ErrorCodeResponsesStreamIncomplete,
+		http.StatusServiceUnavailable,
+	)
+
+	require.True(t, IsResponsesStreamIncompleteError(upstreamErr))
+	RecordChannelFailureForCooldownWithActor(channelError, upstreamErr, "gpt-5.5", 161, 211)
+	require.False(t, IsChannelCoolingDown(36))
+}
+
 func TestIsChannelCoolingDownLocalExpires(t *testing.T) {
 	originalEnabled := common.AutomaticChannelCooldownEnabled
 	originalRedisEnabled := common.RedisEnabled
@@ -187,6 +221,42 @@ func TestClearChannelCooldownRemovesProbeRequiredEntry(t *testing.T) {
 	require.True(t, IsChannelCoolingDown(12))
 	ClearChannelCooldown(12)
 	require.False(t, IsChannelCoolingDown(12))
+}
+
+func TestRecoverChannelCooldownReturnsPreviousStateAndClears(t *testing.T) {
+	originalEnabled := common.AutomaticChannelCooldownEnabled
+	originalProbeEnabled := common.ChannelCooldownProbeEnabled
+	originalRedisEnabled := common.RedisEnabled
+	t.Cleanup(func() {
+		common.AutomaticChannelCooldownEnabled = originalEnabled
+		common.ChannelCooldownProbeEnabled = originalProbeEnabled
+		common.RedisEnabled = originalRedisEnabled
+		channelCooldownMu.Lock()
+		channelCooldownLocal = map[int]channelCooldownEntry{}
+		channelCooldownMu.Unlock()
+	})
+
+	common.AutomaticChannelCooldownEnabled = true
+	common.ChannelCooldownProbeEnabled = true
+	common.RedisEnabled = false
+	channelCooldownMu.Lock()
+	channelCooldownLocal[14] = channelCooldownEntry{
+		channelName:   "cooling-channel",
+		coolUntil:     time.Now().Add(time.Minute),
+		probeRequired: true,
+		probeModel:    channelCooldownProbeModel,
+		nextProbeAt:   time.Now(),
+		lastError:     "probe timeout",
+	}
+	channelCooldownMu.Unlock()
+
+	status := RecoverChannelCooldown(14)
+
+	require.Equal(t, 14, status.ChannelID)
+	require.True(t, status.CoolingDown)
+	require.True(t, status.ProbeRequired)
+	require.Equal(t, "cooling-channel", status.ChannelName)
+	require.False(t, IsChannelCoolingDown(14))
 }
 
 func TestApplyChannelCooldownProbeEntryKeepsProbeRequired(t *testing.T) {
