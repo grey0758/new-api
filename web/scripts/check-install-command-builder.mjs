@@ -24,6 +24,8 @@ const badMarkers = [
   'C:\\WINDOWS\\system32',
   'D:/work/wc_project',
   'C:/Users/Admin',
+  '"api_key"',
+  'api_key =',
 ];
 
 assert.equal(
@@ -61,6 +63,17 @@ for (const platform of platforms) {
     command.includes('https://api.opencodex.uk/v1'),
     `${platform} command did not normalize base URL to /v1`,
   );
+  assert(
+    command.includes('opencodex-workspace') &&
+      command.includes('[projects.') &&
+      command.includes('trust_level = "trusted"'),
+    `${platform} command must create and trust the per-user workspace`,
+  );
+  assert(
+    command.includes('env_key = "CODEX_API_KEY"') ||
+      command.includes("env_key='CODEX_API_KEY'"),
+    `${platform} command must configure provider auth through env_key`,
+  );
 }
 
 const linuxCommand = buildInstallCommand(
@@ -72,8 +85,21 @@ const linuxCommand = buildInstallCommand(
 assert(
   linuxCommand.includes('install_node') &&
     linuxCommand.includes('install_codex') &&
-    linuxCommand.includes('NODE_LTS_MAJOR=24'),
+    linuxCommand.includes('NODE_LTS_MAJOR=24') &&
+    linuxCommand.includes('cd "$WORK_DIR" && "$CODEX_BIN"'),
   'linux command must use the canonical OpenCodex install flow',
+);
+
+const macosCommand = buildInstallCommand(
+  'macos',
+  'DUMMY_KEY',
+  'https://api.opencodex.uk',
+  'gpt-5.5',
+);
+assert(
+  macosCommand.includes('WORK_DIR="$HOME/opencodex-workspace"') &&
+    macosCommand.includes('cd "$WORK_DIR" && codex'),
+  'macos command must launch Codex from the per-user workspace',
 );
 
 const windowsCommand = buildInstallCommand(

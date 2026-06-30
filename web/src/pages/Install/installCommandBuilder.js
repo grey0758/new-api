@@ -34,22 +34,23 @@ const LINUX_CURRENT_COMMAND_TEMPLATE = [
   `install_codex || { echo "[×] Codex 安装失败，请检查 npm 输出"; exit 1; }`,
   `CODEX_BIN="$(command -v codex)"`,
   `echo "========== 配置 Codex =========="`,
-  `mkdir -p ~/.codex`,
+  `WORK_DIR="$HOME/opencodex-workspace"`,
+  `mkdir -p ~/.codex "$WORK_DIR"`,
   `ENV_FILE="$HOME/.codex/env"`,
   `printf 'export API_KEY=%q\nexport BASE_URL=%q\nexport MODEL=%q\nexport MODEL_NAME=%q\nexport CODEX_API_KEY=%q\nexport OPENAI_API_KEY=%q\nexport PATH="$HOME/.local/bin:$HOME/.fnm/aliases/default/bin:$PATH"\n' "$API_KEY" "$BASE_URL" "$MODEL" "$MODEL" "$API_KEY" "$API_KEY" > "$ENV_FILE"`,
   `chmod 600 "$ENV_FILE"`,
   `for SHELL_RC in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.zshrc" "$HOME/.zprofile"; do touch "$SHELL_RC" 2>/dev/null || true; if [ -f "$SHELL_RC" ]; then sed -i '/# OpenCodex environment/,+1d;/\\.codex\\/env/d;/^export CODEX_API_KEY=/d;/^export OPENAI_API_KEY=/d;/^export API_KEY=/d;/^export BASE_URL=/d;/^export MODEL=/d;/^export MODEL_NAME=/d;/HOME\\/\\.local\\/bin/d' "$SHELL_RC" 2>/dev/null || true; printf '\\n# OpenCodex environment\\n[ -f "$HOME/.codex/env" ] && . "$HOME/.codex/env"\\n' >> "$SHELL_RC"; fi; done`,
   `. "$ENV_FILE"`,
-  `printf '{"model_provider":"codex","model":"%s","model_reasoning_effort":"high","disable_response_storage":true,"approval_policy":"never","sandbox_mode":"danger-full-access","web_search":"live","model_providers":{"codex":{"name":"codex","base_url":"%s","wire_api":"responses","api_key":"%s","env_key":"CODEX_API_KEY","supports_websockets":false}},"projects":{"'"$HOME"'":{"trust_level":"trusted"}},"notice":{"model_migrations":{"gpt-5.3-codex":"%s"}}}' "$MODEL" "$BASE_URL" "$API_KEY" "$MODEL" > ~/.codex/config.json`,
+  `printf '{"model_provider":"codex","model":"%s","model_reasoning_effort":"high","disable_response_storage":true,"approval_policy":"never","sandbox_mode":"danger-full-access","web_search":"live","model_providers":{"codex":{"name":"codex","base_url":"%s","wire_api":"responses","env_key":"CODEX_API_KEY","supports_websockets":false}},"projects":{"'"$WORK_DIR"'":{"trust_level":"trusted"}},"notice":{"model_migrations":{"gpt-5.3-codex":"%s"}}}' "$MODEL" "$BASE_URL" "$MODEL" > ~/.codex/config.json`,
   `printf '{"OPENAI_API_KEY":"%s"}' "$API_KEY" > ~/.codex/auth.json`,
-  `printf 'model_provider = "codex"\\nmodel = "%s"\\nmodel_reasoning_effort = "high"\\ndisable_response_storage = true\\napproval_policy = "never"\\nsandbox_mode = "danger-full-access"\\nweb_search = "live"\\n\\n[model_providers.codex]\\nname = "codex"\\nbase_url = "%s"\\nwire_api = "responses"\\napi_key = "%s"\\nenv_key = "CODEX_API_KEY"\\nsupports_websockets = false\\n\\n[notice.model_migrations]\\n"gpt-5.3-codex" = "%s"\\n' "$MODEL" "$BASE_URL" "$API_KEY" "$MODEL" > ~/.codex/config.toml`,
+  `printf 'model_provider = "codex"\\nmodel = "%s"\\nmodel_reasoning_effort = "high"\\ndisable_response_storage = true\\napproval_policy = "never"\\nsandbox_mode = "danger-full-access"\\nweb_search = "live"\\n\\n[model_providers.codex]\\nname = "codex"\\nbase_url = "%s"\\nwire_api = "responses"\\nenv_key = "CODEX_API_KEY"\\nsupports_websockets = false\\n\\n[projects."%s"]\\ntrust_level = "trusted"\\n\\n[notice.model_migrations]\\n"gpt-5.3-codex" = "%s"\\n' "$MODEL" "$BASE_URL" "$WORK_DIR" "$MODEL" > ~/.codex/config.toml`,
   `echo "[√] 配置已写入: $HOME/.codex"`,
   `echo "========== 验证 =========="`,
   `echo "Node.js: $(node --version)"`,
   `echo "npm:     $(npm --version)"`,
   `echo "Codex:   $($CODEX_BIN --version)"`,
   `echo "========== 启动 Codex =========="`,
-  `"$CODEX_BIN" --dangerously-bypass-approvals-and-sandbox`,
+  `cd "$WORK_DIR" && "$CODEX_BIN"`,
 ].join(' && ');
 
 const LINUX_LEGACY_ENV_CONFIG_COMMAND = String.raw`sed -i '/CODEX_API_KEY/d' ~/.bashrc 2>/dev/null; echo "export CODEX_API_KEY=\"\${API_KEY}\"" >> ~/.bashrc; export CODEX_API_KEY="$API_KEY"; [ -f ~/.zshrc ] && sed -i '/CODEX_API_KEY/d' ~/.zshrc 2>/dev/null && echo "export CODEX_API_KEY=\"\${API_KEY}\"" >> ~/.zshrc; mkdir -p ~/.codex`;
@@ -284,6 +285,26 @@ function hardenMacosCommandTemplate(template) {
       .replace(
         'echo "环境变量已永久写入: $SHELL_RC";',
         'echo "环境变量已永久写入: $ENV_FILE";',
+      )
+      .replace(
+        'echo "========== 配置 Codex =========="; mkdir -p ~/.codex;',
+        'echo "========== 配置 Codex =========="; WORK_DIR="$HOME/opencodex-workspace"; mkdir -p ~/.codex "$WORK_DIR";',
+      )
+      .replace(
+        `"projects":{"'"$HOME"'":{"trust_level":"trusted"}}`,
+        `"projects":{"'"$WORK_DIR"'":{"trust_level":"trusted"}}`,
+      )
+      .replace(
+        '\\n[notice.model_migrations]\\n"gpt-5.3-codex" = "%s"\\n',
+        '\\n[projects."%s"]\\ntrust_level = "trusted"\\n\\n[notice.model_migrations]\\n"gpt-5.3-codex" = "%s"\\n',
+      )
+      .replace(
+        `" "$MODEL_NAME" "$BASE_URL" "$MODEL_NAME" > ~/.codex/config.toml;`,
+        `" "$MODEL_NAME" "$BASE_URL" "$WORK_DIR" "$MODEL_NAME" > ~/.codex/config.toml;`,
+      )
+      .replace(
+        'codex --dangerously-bypass-approvals-and-sandbox; fi',
+        'cd "$WORK_DIR" && codex; fi',
       ),
   );
 }
@@ -355,7 +376,7 @@ function hardenWindowsCommandTemplate(template) {
     )
     .replace(
       "codex=@{ name='codex'; base_url=$baseUrl; wire_api='responses'; api_key=$apiKey }",
-      "codex=@{ name='codex'; base_url=$baseUrl; wire_api='responses'; api_key=$apiKey; supports_websockets=$false }",
+      "codex=@{ name='codex'; base_url=$baseUrl; wire_api='responses'; env_key='CODEX_API_KEY'; supports_websockets=$false }",
     )
     .replace(
       "$codexDir = Join-Path $HOME '.codex'; New-Item -ItemType Directory -Force -Path $codexDir | Out-Null;",
@@ -379,7 +400,7 @@ function hardenWindowsCommandTemplate(template) {
     )
     .replace(
       "('api_key = \"' + $apiKey + '\"'),''",
-      "('api_key = \"' + $apiKey + '\"'),'supports_websockets = false',''",
+      "'env_key = \"CODEX_API_KEY\"','supports_websockets = false',''",
     )
     .replace(
       "Write-Host '[√] 配置已写入' -ForegroundColor Green",
