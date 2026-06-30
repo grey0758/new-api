@@ -5,9 +5,12 @@ import { API } from '../../helpers';
 import { fetchTokenKey } from '../../helpers/token';
 import {
   buildInstallCommand,
+  DEFAULT_INSTALL_COMMAND_CONFIG,
   defaultBaseUrlFromStatus,
   INSTALL_MODELS,
+  installModelsFromConfig,
   normalizeCodexBaseUrl,
+  normalizeInstallCommandConfig,
   PLATFORMS,
 } from './installCommandBuilder';
 
@@ -43,6 +46,9 @@ export default function Install() {
   const [baseUrl, setBaseUrl] = useState('');
   const [model, setModel] = useState(INSTALL_MODELS[0]);
   const [platform, setPlatform] = useState('linux');
+  const [installCommandConfig, setInstallCommandConfig] = useState(
+    DEFAULT_INSTALL_COMMAND_CONFIG,
+  );
   const [copied, setCopied] = useState(false);
   const [message, setMessage] = useState('');
   const defaultBaseUrl = useMemo(() => defaultBaseUrlFromStatus(), []);
@@ -113,6 +119,43 @@ export default function Install() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+
+    async function loadInstallCommandConfig() {
+      try {
+        const response = await API.get('/api/status', {
+          disableDuplicate: true,
+          skipErrorHandler: true,
+        });
+        const { success, data } = response.data || {};
+        if (!success || cancelled) {
+          return;
+        }
+        const rawConfig = data?.install_command_config || {};
+        const normalizedConfig = normalizeInstallCommandConfig(rawConfig);
+        if (!cancelled) {
+          setInstallCommandConfig(normalizedConfig);
+          setModel((current) =>
+            normalizedConfig.models.includes(current)
+              ? current
+              : normalizedConfig.defaultModel,
+          );
+        }
+      } catch {
+        if (!cancelled) {
+          setInstallCommandConfig(DEFAULT_INSTALL_COMMAND_CONFIG);
+        }
+      }
+    }
+
+    void loadInstallCommandConfig();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!loading) {
       writeSaved('newapi.install.apiKey', apiKey);
     }
@@ -133,9 +176,20 @@ export default function Install() {
   }, [platform]);
 
   const normalizedBaseUrl = useMemo(() => normalizeCodexBaseUrl(baseUrl), [baseUrl]);
+  const modelOptions = useMemo(
+    () => installModelsFromConfig(installCommandConfig),
+    [installCommandConfig],
+  );
   const command = useMemo(
-    () => buildInstallCommand(platform, apiKey, normalizedBaseUrl, model),
-    [apiKey, model, normalizedBaseUrl, platform],
+    () =>
+      buildInstallCommand(
+        platform,
+        apiKey,
+        normalizedBaseUrl,
+        model,
+        installCommandConfig,
+      ),
+    [apiKey, installCommandConfig, model, normalizedBaseUrl, platform],
   );
   const selectedPlatform = PLATFORMS.find((item) => item.id === platform) || PLATFORMS[0];
   const isPresetBaseUrl = Boolean(normalizedBaseUrl) && baseUrlOptions.includes(normalizedBaseUrl);
@@ -250,7 +304,7 @@ export default function Install() {
               <div className='space-y-2'>
                 <label className='font-mono text-xs text-[#6f8096]'>模型</label>
                 <div className='grid gap-2 sm:grid-cols-2'>
-                  {INSTALL_MODELS.map((option) => {
+                  {modelOptions.map((option) => {
                     const selected = option === model;
                     return (
                       <button

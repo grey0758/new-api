@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -20,6 +21,150 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+const installCommandConfigOptionKey = "InstallCommandConfig"
+
+type installCommandConfig struct {
+	Models                  []string `json:"models,omitempty"`
+	DefaultModel            string   `json:"default_model,omitempty"`
+	ApprovalPolicy          string   `json:"approval_policy"`
+	SandboxMode             string   `json:"sandbox_mode"`
+	SupportsWebsockets      bool     `json:"supports_websockets"`
+	WorkspaceName           string   `json:"workspace_name"`
+	WindowsProjectPathStyle string   `json:"windows_project_path_style"`
+	LaunchBypassFlag        bool     `json:"launch_bypass_flag"`
+}
+
+func defaultInstallCommandConfig() installCommandConfig {
+	return installCommandConfig{
+		Models:                  []string{"gpt-5.5", "gpt-5.4"},
+		DefaultModel:            "gpt-5.5",
+		ApprovalPolicy:          "never",
+		SandboxMode:             "danger-full-access",
+		SupportsWebsockets:      false,
+		WorkspaceName:           "opencodex-workspace",
+		WindowsProjectPathStyle: "forward-slash",
+		LaunchBypassFlag:        false,
+	}
+}
+
+func publicInstallCommandConfig(raw string) installCommandConfig {
+	config := defaultInstallCommandConfig()
+	if strings.TrimSpace(raw) != "" {
+		var parsed installCommandConfig
+		if err := json.Unmarshal([]byte(raw), &parsed); err == nil {
+			if len(parsed.Models) > 0 {
+				config.Models = sanitizeInstallModels(parsed.Models, config.Models)
+			}
+			if isSafeInstallModel(parsed.DefaultModel) {
+				config.DefaultModel = parsed.DefaultModel
+			}
+			if parsed.ApprovalPolicy != "" {
+				config.ApprovalPolicy = sanitizeApprovalPolicy(parsed.ApprovalPolicy, config.ApprovalPolicy)
+			}
+			if parsed.SandboxMode != "" {
+				config.SandboxMode = sanitizeSandboxMode(parsed.SandboxMode, config.SandboxMode)
+			}
+			config.SupportsWebsockets = parsed.SupportsWebsockets
+			if parsed.WorkspaceName != "" {
+				config.WorkspaceName = sanitizeWorkspaceName(parsed.WorkspaceName, config.WorkspaceName)
+			}
+			if parsed.WindowsProjectPathStyle != "" {
+				config.WindowsProjectPathStyle = sanitizeWindowsProjectPathStyle(parsed.WindowsProjectPathStyle, config.WindowsProjectPathStyle)
+			}
+			config.LaunchBypassFlag = parsed.LaunchBypassFlag
+		}
+	}
+	if !containsString(config.Models, config.DefaultModel) {
+		config.DefaultModel = config.Models[0]
+	}
+	return config
+}
+
+func sanitizeApprovalPolicy(value string, fallback string) string {
+	switch strings.TrimSpace(value) {
+	case "never", "on-request", "on-failure", "untrusted":
+		return strings.TrimSpace(value)
+	default:
+		return fallback
+	}
+}
+
+func sanitizeSandboxMode(value string, fallback string) string {
+	switch strings.TrimSpace(value) {
+	case "danger-full-access", "workspace-write", "read-only":
+		return strings.TrimSpace(value)
+	default:
+		return fallback
+	}
+}
+
+func sanitizeWindowsProjectPathStyle(value string, fallback string) string {
+	switch strings.TrimSpace(value) {
+	case "forward-slash", "escaped-backslash":
+		return strings.TrimSpace(value)
+	default:
+		return fallback
+	}
+}
+
+var installWorkspaceNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
+func sanitizeWorkspaceName(value string, fallback string) string {
+	value = strings.TrimSpace(value)
+	if installWorkspaceNamePattern.MatchString(value) {
+		return value
+	}
+	return fallback
+}
+
+var installModelPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,80}$`)
+
+func isSafeInstallModel(value string) bool {
+	return installModelPattern.MatchString(strings.TrimSpace(value))
+}
+
+func sanitizeInstallModels(values []string, fallback []string) []string {
+	models := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if !isSafeInstallModel(value) {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		models = append(models, value)
+	}
+	if len(models) == 0 {
+		return fallback
+	}
+	return models
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeInstallCommandConfigValue(raw string) (string, error) {
+	var parsed installCommandConfig
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return "", err
+	}
+	normalized := publicInstallCommandConfig(raw)
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
 
 func TestStatus(c *gin.Context) {
 	err := model.PingDB()
@@ -57,6 +202,7 @@ func GetStatus(c *gin.Context) {
 		installLink = baseURL + "/install/"
 	}
 	headerNavModules := runtimeHeaderNavModules(common.OptionMap["HeaderNavModules"], installLink)
+	installCommandConfig := publicInstallCommandConfig(common.OptionMap[installCommandConfigOptionKey])
 
 	data := gin.H{
 		"version":                     common.Version,
@@ -82,6 +228,7 @@ func GetStatus(c *gin.Context) {
 		"top_up_link":                 common.TopUpLink,
 		"docs_link":                   operation_setting.GetGeneralSetting().DocsLink,
 		"install_link":                installLink,
+		"install_command_config":      installCommandConfig,
 		"quota_per_unit":              common.QuotaPerUnit,
 		// 兼容旧前端：保留 display_in_currency，同时提供新的 quota_display_type
 		"display_in_currency":           operation_setting.IsCurrencyDisplay(),
