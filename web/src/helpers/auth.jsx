@@ -36,6 +36,15 @@ export const AuthRedirect = ({ children }) => {
   const user = localStorage.getItem('user');
 
   if (user) {
+    const params = new URLSearchParams(window.location.search);
+    const chatOIDCNext = params.get('chat_oidc') === '1' ? params.get('next') : '';
+    if (
+      chatOIDCNext &&
+      chatOIDCNext.startsWith('https://api.open-codex.com/api/chat-oidc/authorize')
+    ) {
+      window.location.href = chatOIDCNext;
+      return null;
+    }
     return <Navigate to='/console' replace />;
   }
 

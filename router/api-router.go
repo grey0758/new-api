@@ -28,6 +28,14 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/user-agreement", controller.GetUserAgreement)
 		apiRouter.GET("/privacy-policy", controller.GetPrivacyPolicy)
 		apiRouter.GET("/about", controller.GetAbout)
+		chatOIDCRoute := apiRouter.Group("/chat-oidc")
+		{
+			chatOIDCRoute.GET("/.well-known/openid-configuration", controller.ChatOIDCDiscovery)
+			chatOIDCRoute.GET("/authorize", controller.ChatOIDCAuthorize)
+			chatOIDCRoute.POST("/token", controller.ChatOIDCToken)
+			chatOIDCRoute.GET("/userinfo", controller.ChatOIDCUserInfo)
+			chatOIDCRoute.GET("/jwks", controller.ChatOIDCJWKS)
+		}
 		//apiRouter.GET("/midjourney", controller.GetMidjourney)
 		apiRouter.GET("/home_page_content", controller.GetHomePageContent)
 		apiRouter.GET("/pricing", middleware.TryUserAuth(), controller.GetPricing)

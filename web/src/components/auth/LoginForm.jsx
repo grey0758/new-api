@@ -108,6 +108,17 @@ const LoginForm = () => {
   const githubTimeoutRef = useRef(null);
   const githubButtonText = t(githubButtonTextKeyByState[githubButtonState]);
   const [customOAuthLoading, setCustomOAuthLoading] = useState({});
+  const chatOIDCNext = searchParams.get('chat_oidc') === '1'
+    ? searchParams.get('next')
+    : '';
+
+  const navigateAfterLogin = () => {
+    if (chatOIDCNext && chatOIDCNext.startsWith('https://api.open-codex.com/api/chat-oidc/authorize')) {
+      window.location.href = chatOIDCNext;
+      return;
+    }
+    navigate('/console');
+  };
 
   const logo = getLogo();
   const systemName = getSystemName();
@@ -185,7 +196,7 @@ const LoginForm = () => {
         localStorage.setItem('user', JSON.stringify(data));
         setUserData(data);
         updateAPI();
-        navigate('/');
+        navigateAfterLogin();
         showSuccess('登录成功！');
         setShowWeChatLoginModal(false);
       } else {
@@ -235,7 +246,7 @@ const LoginForm = () => {
               centered: true,
             });
           }
-          navigate('/console');
+          navigateAfterLogin();
         } else {
           showError(message);
         }
@@ -280,7 +291,7 @@ const LoginForm = () => {
         showSuccess('登录成功！');
         setUserData(data);
         updateAPI();
-        navigate('/');
+        navigateAfterLogin();
       } else {
         showError(message);
       }
@@ -436,7 +447,7 @@ const LoginForm = () => {
         setUserData(finish.data);
         updateAPI();
         showSuccess('登录成功！');
-        navigate('/console');
+        navigateAfterLogin();
       } else {
         showError(finish.message || 'Passkey 登录失败，请重试');
       }
@@ -471,7 +482,7 @@ const LoginForm = () => {
     setUserData(data);
     updateAPI();
     showSuccess('登录成功！');
-    navigate('/console');
+    navigateAfterLogin();
   };
 
   // 返回登录页面
