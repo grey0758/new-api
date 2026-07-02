@@ -41,13 +41,14 @@ import {
   Clock3,
   Play,
   RefreshCw,
+  RotateCcw,
   Search,
   ShieldCheck,
   Thermometer,
   Zap,
 } from 'lucide-react';
 import { CHART_CONFIG } from '../../constants/dashboard.constants';
-import { API, showError, showInfo, showSuccess } from '../../helpers';
+import { API, isRoot, showError, showSuccess } from '../../helpers';
 import { getChannelIcon } from '../../helpers';
 
 const { Text, Title } = Typography;
@@ -202,6 +203,7 @@ const ChannelHealth = () => {
   const [eventRecord, setEventRecord] = useState(null);
   const [eventItems, setEventItems] = useState([]);
   const [eventScope, setEventScope] = useState('probe');
+  const [resettingAffinity, setResettingAffinity] = useState(false);
   const [keyword, setKeyword] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
 
@@ -280,35 +282,6 @@ const ChannelHealth = () => {
     ],
     [summary, t],
   );
-
-  const directCooldownItems = useMemo(() => {
-    return [...items]
-      .filter((item) => {
-        const events = item?.events || {};
-        const cooldown = item?.cooldown || {};
-        return (
-          (events.newapi_cooldowns || 0) > 0 ||
-          (events.provider_cooldowns || 0) > 0 ||
-          cooldown.cooling_down ||
-          cooldown.probe_required ||
-          cooldown.probing
-        );
-      })
-      .sort((a, b) => {
-        const aTime =
-          a?.events?.last_event_at ||
-          a?.cooldown?.last_probe_at ||
-          a?.cooldown?.next_probe_at ||
-          0;
-        const bTime =
-          b?.events?.last_event_at ||
-          b?.cooldown?.last_probe_at ||
-          b?.cooldown?.next_probe_at ||
-          0;
-        return bTime - aTime;
-      })
-      .slice(0, 8);
-  }, [items]);
 
   const statusChartSpec = useMemo(
     () => ({
@@ -446,6 +419,37 @@ const ChannelHealth = () => {
           }
         } finally {
           setRecoveringId(null);
+        }
+      },
+    });
+  };
+
+  const resetChannelAffinity = () => {
+    Modal.confirm({
+      title: t('重置渠道亲和性？'),
+      content: t(
+        '该操作会清空当前运行实例内存中的渠道亲和性缓存，不会修改渠道配置、冷却状态或历史日志。',
+      ),
+      onOk: async () => {
+        setResettingAffinity(true);
+        try {
+          const res = await API.delete('/api/option/channel_affinity_cache', {
+            params: { all: true },
+            disableDuplicate: true,
+          });
+          const { success, message, data } = res.data || {};
+          if (!success) {
+            showError(message || t('重置渠道亲和性失败'));
+            return;
+          }
+          showSuccess(
+            t('已重置渠道亲和性，清理 ${deleted} 条缓存').replace(
+              '${deleted}',
+              String(data?.deleted ?? 0),
+            ),
+          );
+        } finally {
+          setResettingAffinity(false);
         }
       },
     });
@@ -936,15 +940,28 @@ const ChannelHealth = () => {
             {t('实时状态里的“当前冷却”才表示正在冷却；健康事件是近24小时历史记录')}
           </Text>
         </div>
-        <Button
-          type='primary'
-          theme='light'
-          icon={<RefreshCw size={15} />}
-          loading={loading}
-          onClick={loadHealth}
-        >
-          {t('刷新')}
-        </Button>
+        <Space wrap>
+          {isRoot() ? (
+            <Button
+              type='warning'
+              theme='light'
+              icon={<RotateCcw size={15} />}
+              loading={resettingAffinity}
+              onClick={resetChannelAffinity}
+            >
+              {t('重置渠道亲和性')}
+            </Button>
+          ) : null}
+          <Button
+            type='primary'
+            theme='light'
+            icon={<RefreshCw size={15} />}
+            loading={loading}
+            onClick={loadHealth}
+          >
+            {t('刷新')}
+          </Button>
+        </Space>
       </div>
 
       <Banner
@@ -988,91 +1005,6 @@ const ChannelHealth = () => {
           </div>
         </Card>
       </div>
-
-      <Card
-        title={t('当前冷却与近24h冷却事件')}
-        bodyStyle={{ padding: 16 }}
-        className='mb-3'
-      >
-        {directCooldownItems.length ? (
-          <div className='space-y-3'>
-            {directCooldownItems.map((record) => {
-              const events = record?.events || {};
-              const cooldown = record?.cooldown || {};
-              const tags = [];
-              if ((events.newapi_cooldowns || 0) > 0) {
-                tags.push(
-                  <Tag key='newapi' color='yellow' size='small'>
-                    {t('曾NewAPI冷却')} {events.newapi_cooldowns}
-                  </Tag>,
-                );
-              }
-              if ((events.provider_cooldowns || 0) > 0) {
-                tags.push(
-                  <Tag key='provider' color='orange' size='small'>
-                    {t('曾上游限流')} {events.provider_cooldowns}
-                  </Tag>,
-                );
-              }
-              if (cooldown.cooling_down) {
-                tags.push(
-                  <Tag key='cooling' color='red' size='small'>
-                    {t('当前冷却中')}
-                  </Tag>,
-                );
-              }
-              if (cooldown.probe_required) {
-                tags.push(
-                  <Tag key='probe' color='blue' size='small'>
-                    {cooldown.probing ? t('探针中') : t('探针等待')}
-                  </Tag>,
-                );
-              }
-              return (
-                <div
-                  key={record.id}
-                  className='flex flex-col gap-2 rounded-lg border border-[var(--semi-color-border)] px-3 py-2 md:flex-row md:items-center md:justify-between'
-                >
-                  <div className='min-w-0'>
-                    <div className='flex items-center gap-2 min-w-0'>
-                      {getChannelIcon(record.type)}
-                      <Text strong ellipsis={{ showTooltip: true }}>
-                        #{record.id} {record.name}
-                      </Text>
-                    </div>
-                    <Text type='tertiary' size='small' ellipsis={{ showTooltip: true }}>
-                      {record.base_url || '-'}
-                    </Text>
-                  </div>
-                  <div className='flex flex-wrap items-center gap-2'>
-                    {tags}
-                  </div>
-                  <div className='text-right'>
-                    <Text size='small' ellipsis={{ showTooltip: true }}>
-                      {t(getEventLabel(events.last_event_type))}
-                    </Text>
-                    <Text type='tertiary' size='small' ellipsis={{ showTooltip: true }}>
-                      {formatTime(events.last_event_at)}
-                    </Text>
-                    {cooldown.cooldown_ttl_seconds ? (
-                      <Text type='tertiary' size='small'>
-                        TTL {formatDuration(cooldown.cooldown_ttl_seconds)}
-                      </Text>
-                    ) : null}
-                    {cooldown.last_failure_at ? (
-                      <Text type='tertiary' size='small'>
-                        {t('最后失败')} {formatTime(cooldown.last_failure_at)}
-                      </Text>
-                    ) : null}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <Text type='tertiary'>{t('当前没有冷却，也没有近24小时冷却事件')}</Text>
-        )}
-      </Card>
 
       <div className='grid grid-cols-2 lg:grid-cols-6 gap-3 mb-3'>
         <StatCard
