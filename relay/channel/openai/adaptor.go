@@ -71,6 +71,9 @@ func shouldNormalizeResponsesRequestArguments(info *relaycommon.RelayInfo) bool 
 		return false
 	}
 	baseURL := strings.ToLower(strings.TrimSpace(info.ChannelBaseUrl))
+	if strings.Contains(baseURL, "cliproxyplus") {
+		return true
+	}
 	if strings.Contains(baseURL, "cliproxy") ||
 		strings.Contains(baseURL, "codex2api.com") ||
 		strings.Contains(baseURL, "127.0.0.1:8317") ||

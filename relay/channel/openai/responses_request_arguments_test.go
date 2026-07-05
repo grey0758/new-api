@@ -35,6 +35,11 @@ func TestShouldNormalizeResponsesRequestArguments(t *testing.T) {
 			want: false,
 		},
 		{
+			name: "cliproxyplus expects object arguments",
+			info: &relaycommon.RelayInfo{UsingGroup: "plus", ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 58, ChannelBaseUrl: "http://cliproxyplus:8317"}},
+			want: true,
+		},
+		{
 			name: "988665 expects object arguments",
 			info: &relaycommon.RelayInfo{UsingGroup: "default", ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 33, ChannelBaseUrl: "https://988665.xyz"}},
 			want: true,
@@ -110,5 +115,49 @@ func TestConvertOpenAIResponsesRequestNormalizesCompatibleUpstreamArguments(t *t
 	}
 	if got, want := arguments["retry"], false; got != want {
 		t.Fatalf("retry = %v, want %v", got, want)
+	}
+}
+
+func TestConvertOpenAIResponsesRequestNormalizesCliproxyPlusArguments(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := &relaycommon.RelayInfo{UsingGroup: "plus", ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 58, ChannelBaseUrl: "http://cliproxyplus:8317"}}
+	request := dto.OpenAIResponsesRequest{
+		Model: "gpt-5.5",
+		Input: json.RawMessage(`[
+			{
+				"type":"apply_patch_call",
+				"call_id":"call_123",
+				"name":"apply_patch",
+				"arguments":"{\"cmd\":\"pwd\",\"retry\":false}"
+			}
+		]`),
+	}
+
+	converted, err := adaptor.ConvertOpenAIResponsesRequest(nil, info, request)
+	if err != nil {
+		t.Fatalf("ConvertOpenAIResponsesRequest() error = %v", err)
+	}
+
+	responsesRequest, ok := converted.(dto.OpenAIResponsesRequest)
+	if !ok {
+		t.Fatalf("converted type = %T, want dto.OpenAIResponsesRequest", converted)
+	}
+
+	var input []struct {
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal(responsesRequest.Input, &input); err != nil {
+		t.Fatalf("unmarshal converted input: %v", err)
+	}
+	if len(input) != 1 {
+		t.Fatalf("expected one input item, got %d", len(input))
+	}
+
+	var arguments map[string]any
+	if err := json.Unmarshal(input[0].Arguments, &arguments); err != nil {
+		t.Fatalf("arguments should be object: %v; raw=%s", err, input[0].Arguments)
+	}
+	if got, want := arguments["cmd"], "pwd"; got != want {
+		t.Fatalf("cmd = %v, want %v", got, want)
 	}
 }
