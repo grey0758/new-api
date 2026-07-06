@@ -20,6 +20,11 @@ func TestShouldNormalizeResponsesRequestArguments(t *testing.T) {
 			want: false,
 		},
 		{
+			name: "production channel 1 cliproxy expects object arguments",
+			info: &relaycommon.RelayInfo{UsingGroup: "svip", ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 1, ChannelBaseUrl: "http://cliproxy:8317"}},
+			want: true,
+		},
+		{
 			name: "image group keeps legacy string arguments",
 			info: &relaycommon.RelayInfo{UsingGroup: "image", ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 30, ChannelBaseUrl: "https://cliproxy1.opencodex.uk"}},
 			want: false,
@@ -121,6 +126,50 @@ func TestConvertOpenAIResponsesRequestNormalizesCompatibleUpstreamArguments(t *t
 func TestConvertOpenAIResponsesRequestNormalizesCliproxyPlusArguments(t *testing.T) {
 	adaptor := &Adaptor{}
 	info := &relaycommon.RelayInfo{UsingGroup: "plus", ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 58, ChannelBaseUrl: "http://cliproxyplus:8317"}}
+	request := dto.OpenAIResponsesRequest{
+		Model: "gpt-5.5",
+		Input: json.RawMessage(`[
+			{
+				"type":"apply_patch_call",
+				"call_id":"call_123",
+				"name":"apply_patch",
+				"arguments":"{\"cmd\":\"pwd\",\"retry\":false}"
+			}
+		]`),
+	}
+
+	converted, err := adaptor.ConvertOpenAIResponsesRequest(nil, info, request)
+	if err != nil {
+		t.Fatalf("ConvertOpenAIResponsesRequest() error = %v", err)
+	}
+
+	responsesRequest, ok := converted.(dto.OpenAIResponsesRequest)
+	if !ok {
+		t.Fatalf("converted type = %T, want dto.OpenAIResponsesRequest", converted)
+	}
+
+	var input []struct {
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal(responsesRequest.Input, &input); err != nil {
+		t.Fatalf("unmarshal converted input: %v", err)
+	}
+	if len(input) != 1 {
+		t.Fatalf("expected one input item, got %d", len(input))
+	}
+
+	var arguments map[string]any
+	if err := json.Unmarshal(input[0].Arguments, &arguments); err != nil {
+		t.Fatalf("arguments should be object: %v; raw=%s", err, input[0].Arguments)
+	}
+	if got, want := arguments["cmd"], "pwd"; got != want {
+		t.Fatalf("cmd = %v, want %v", got, want)
+	}
+}
+
+func TestConvertOpenAIResponsesRequestNormalizesProductionCliproxyChannelOneArguments(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := &relaycommon.RelayInfo{UsingGroup: "svip", ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 1, ChannelBaseUrl: "http://cliproxy:8317"}}
 	request := dto.OpenAIResponsesRequest{
 		Model: "gpt-5.5",
 		Input: json.RawMessage(`[
