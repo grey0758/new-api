@@ -25,6 +25,24 @@ func TestShouldNormalizeResponsesRequestArguments(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "channel setting object mode overrides legacy cliproxy default",
+			info: &relaycommon.RelayInfo{UsingGroup: "default", ChannelMeta: &relaycommon.ChannelMeta{
+				ChannelId:            30,
+				ChannelBaseUrl:       "https://cliproxy1.opencodex.uk",
+				ChannelOtherSettings: dto.ChannelOtherSettings{ResponsesArgumentsMode: "object"},
+			}},
+			want: true,
+		},
+		{
+			name: "channel setting string mode overrides compatible upstream default",
+			info: &relaycommon.RelayInfo{UsingGroup: "pro", ChannelMeta: &relaycommon.ChannelMeta{
+				ChannelId:            47,
+				ChannelBaseUrl:       "https://api.krill-ai.com/codex",
+				ChannelOtherSettings: dto.ChannelOtherSettings{ResponsesArgumentsMode: "string"},
+			}},
+			want: false,
+		},
+		{
 			name: "image group keeps legacy string arguments",
 			info: &relaycommon.RelayInfo{UsingGroup: "image", ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 30, ChannelBaseUrl: "https://cliproxy1.opencodex.uk"}},
 			want: false,

@@ -70,6 +70,12 @@ func shouldNormalizeResponsesRequestArguments(info *relaycommon.RelayInfo) bool 
 	if info == nil {
 		return false
 	}
+	switch strings.ToLower(strings.TrimSpace(info.ChannelOtherSettings.ResponsesArgumentsMode)) {
+	case "object", "objects", "json_object", "json-object":
+		return true
+	case "string", "strings", "legacy":
+		return false
+	}
 	baseURL := strings.ToLower(strings.TrimSpace(info.ChannelBaseUrl))
 	if strings.Contains(baseURL, "cliproxyplus") {
 		return true
