@@ -34,7 +34,8 @@ func buildMaskedTokenResponses(tokens []*model.Token) []*model.Token {
 func GetAllTokens(c *gin.Context) {
 	userId := c.GetInt("id")
 	pageInfo := common.GetPageQuery(c)
-	tokens, err := model.GetAllUserTokens(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	oldestFirst := c.Query("order") == "oldest"
+	tokens, err := model.GetAllUserTokensOrdered(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), oldestFirst)
 	if err != nil {
 		common.ApiError(c, err)
 		return

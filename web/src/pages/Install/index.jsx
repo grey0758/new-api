@@ -6,9 +6,11 @@ import { fetchTokenKey } from '../../helpers/token';
 import {
   buildInstallCommand,
   DEFAULT_INSTALL_COMMAND_CONFIG,
+  DEFAULT_INSTALL_REASONING_EFFORT,
   defaultBaseUrlFromStatus,
   INSTALL_MODELS,
   installModelsFromConfig,
+  installReasoningEffortsFromConfig,
   normalizeCodexBaseUrl,
   normalizeInstallCommandConfig,
   PLATFORMS,
@@ -44,7 +46,12 @@ export default function Install() {
   const [defaultApiKey, setDefaultApiKey] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
-  const [model, setModel] = useState(INSTALL_MODELS[0]);
+  const [model, setModel] = useState(
+    DEFAULT_INSTALL_COMMAND_CONFIG.defaultModel,
+  );
+  const [reasoningEffort, setReasoningEffort] = useState(
+    DEFAULT_INSTALL_REASONING_EFFORT,
+  );
   const [platform, setPlatform] = useState('linux');
   const [installCommandConfig, setInstallCommandConfig] = useState(
     DEFAULT_INSTALL_COMMAND_CONFIG,
@@ -53,18 +60,29 @@ export default function Install() {
   const [message, setMessage] = useState('');
   const defaultBaseUrl = useMemo(() => defaultBaseUrlFromStatus(), []);
   const baseUrlOptions = useMemo(
-    () => Array.from(new Set([defaultBaseUrl].filter(Boolean).map(normalizeCodexBaseUrl))),
+    () =>
+      Array.from(
+        new Set([defaultBaseUrl].filter(Boolean).map(normalizeCodexBaseUrl)),
+      ),
     [defaultBaseUrl],
   );
 
   useEffect(() => {
     const savedBaseUrl = readSaved('newapi.install.baseUrl');
     const savedModel = readSaved('newapi.install.model');
+    const savedReasoningEffort = readSaved(
+      'newapi.install.reasoningEffort.v2',
+    );
     const savedPlatform = readSaved('newapi.install.platform');
 
     setBaseUrl(savedBaseUrl || defaultBaseUrlFromStatus());
     if (INSTALL_MODELS.includes(savedModel)) {
       setModel(savedModel);
+    }
+    if (
+      ['xhigh', 'max'].includes(savedReasoningEffort)
+    ) {
+      setReasoningEffort(savedReasoningEffort);
     }
     if (PLATFORMS.some((item) => item.id === savedPlatform)) {
       setPlatform(savedPlatform);
@@ -78,10 +96,13 @@ export default function Install() {
       setLoading(true);
       setLoadingDefaultKey(true);
       try {
-        const response = await API.get('/api/token/?p=1&size=1', {
+        const response = await API.get(
+          '/api/token/?p=1&size=1&order=oldest',
+          {
           disableDuplicate: true,
           skipErrorHandler: true,
-        });
+          },
+        );
         const { success, data, message: apiMessage } = response.data || {};
         const firstToken = success ? data?.items?.[0] : null;
 
@@ -95,13 +116,15 @@ export default function Install() {
         const key = normalizeApiKey(await fetchTokenKey(firstToken.id));
         if (!cancelled) {
           setDefaultApiKey(key);
-          setApiKey((current) => current || readSaved('newapi.install.apiKey') || key);
+          setApiKey(key);
           setMessage('');
         }
       } catch (error) {
         if (!cancelled) {
           setMessage(error?.message || '默认令牌读取失败');
-          setApiKey((current) => current || readSaved('newapi.install.apiKey') || '');
+          setApiKey(
+            (current) => current || readSaved('newapi.install.apiKey') || '',
+          );
         }
       } finally {
         if (!cancelled) {
@@ -140,6 +163,11 @@ export default function Install() {
               ? current
               : normalizedConfig.defaultModel,
           );
+          setReasoningEffort((current) =>
+            normalizedConfig.reasoningEfforts.includes(current)
+              ? current
+              : normalizedConfig.defaultReasoningEffort,
+          );
         }
       } catch {
         if (!cancelled) {
@@ -172,12 +200,23 @@ export default function Install() {
   }, [model]);
 
   useEffect(() => {
+    writeSaved('newapi.install.reasoningEffort.v2', reasoningEffort);
+  }, [reasoningEffort]);
+
+  useEffect(() => {
     writeSaved('newapi.install.platform', platform);
   }, [platform]);
 
-  const normalizedBaseUrl = useMemo(() => normalizeCodexBaseUrl(baseUrl), [baseUrl]);
+  const normalizedBaseUrl = useMemo(
+    () => normalizeCodexBaseUrl(baseUrl),
+    [baseUrl],
+  );
   const modelOptions = useMemo(
     () => installModelsFromConfig(installCommandConfig),
+    [installCommandConfig],
+  );
+  const reasoningEffortOptions = useMemo(
+    () => installReasoningEffortsFromConfig(installCommandConfig),
     [installCommandConfig],
   );
   const command = useMemo(
@@ -187,17 +226,28 @@ export default function Install() {
         apiKey,
         normalizedBaseUrl,
         model,
+        reasoningEffort,
         installCommandConfig,
       ),
-    [apiKey, installCommandConfig, model, normalizedBaseUrl, platform],
+    [
+      apiKey,
+      installCommandConfig,
+      model,
+      normalizedBaseUrl,
+      platform,
+      reasoningEffort,
+    ],
   );
-  const selectedPlatform = PLATFORMS.find((item) => item.id === platform) || PLATFORMS[0];
-  const isPresetBaseUrl = Boolean(normalizedBaseUrl) && baseUrlOptions.includes(normalizedBaseUrl);
-  const hasSavedApiKey = !loading && readSaved('newapi.install.apiKey') !== null;
-  const apiKeySourceLabel = hasSavedApiKey
-    ? '使用本机保存值'
-    : defaultApiKey
-      ? '已从登录账户填入'
+  const selectedPlatform =
+    PLATFORMS.find((item) => item.id === platform) || PLATFORMS[0];
+  const isPresetBaseUrl =
+    Boolean(normalizedBaseUrl) && baseUrlOptions.includes(normalizedBaseUrl);
+  const hasSavedApiKey =
+    !loading && !defaultApiKey && readSaved('newapi.install.apiKey') !== null;
+  const apiKeySourceLabel = defaultApiKey
+    ? '已填入账户最初创建的默认 Key'
+    : hasSavedApiKey
+      ? '使用本机保存值'
       : '可手动填写';
 
   const copyCommand = async () => {
@@ -247,7 +297,9 @@ export default function Install() {
           </div>
           <h1 className='mt-3 text-3xl font-semibold text-white'>用户安装页</h1>
           <p className='mt-3 max-w-3xl text-sm leading-6 text-[#9fb0c7]'>
-            默认线路来自当前站点部署环境，卡密和 Base URL 都可以直接编辑。登录用户会自动读取账户第一个 Key；本机已编辑过的值会保留。
+            默认线路来自当前站点部署环境，卡密和 Base URL
+            都可以直接编辑。登录用户会自动读取账户最初创建的默认
+            Key，不会因后来新建 Key 而切换。
           </p>
         </section>
 
@@ -268,7 +320,8 @@ export default function Install() {
               生成安装命令
             </div>
             <p className='mt-2 text-sm text-[#7e91aa]'>
-              选择系统、模型和线路后复制命令。默认模型为 {INSTALL_MODELS[0]}。
+              选择系统、模型、思考强度和线路后复制命令。默认模型为{' '}
+              {DEFAULT_INSTALL_COMMAND_CONFIG.defaultModel}。
             </p>
           </div>
 
@@ -276,8 +329,12 @@ export default function Install() {
             <div className='grid gap-4 lg:grid-cols-[1.2fr_0.8fr]'>
               <div className='space-y-2'>
                 <div className='flex flex-wrap items-center justify-between gap-2'>
-                  <label className='font-mono text-xs text-[#6f8096]'>卡密</label>
-                  <span className='text-xs text-[#6f8096]'>{apiKeySourceLabel}</span>
+                  <label className='font-mono text-xs text-[#6f8096]'>
+                    卡密
+                  </label>
+                  <span className='text-xs text-[#6f8096]'>
+                    {apiKeySourceLabel}
+                  </span>
                 </div>
                 <div className='flex min-h-11 items-center gap-2 rounded-lg border border-white/10 bg-[#0a0d13] px-3 text-white'>
                   <KeyRound className='h-4 w-4 flex-none text-[#6f8096]' />
@@ -325,9 +382,37 @@ export default function Install() {
               </div>
             </div>
 
+            <div className='space-y-2'>
+              <label className='font-mono text-xs text-[#6f8096]'>
+                思考强度
+              </label>
+              <div className='grid gap-2 sm:grid-cols-3'>
+                {reasoningEffortOptions.map((option) => {
+                  const selected = option.id === reasoningEffort;
+                  return (
+                    <button
+                      key={option.id}
+                      type='button'
+                      onClick={() => setReasoningEffort(option.id)}
+                      className={`h-11 rounded-lg border px-4 font-mono text-sm transition-colors ${
+                        selected
+                          ? 'border-[#a78bfa]/40 bg-[#a78bfa]/10 text-[#d8ccff]'
+                          : 'border-white/10 bg-[#0a0d13] text-[#9fb0c7] hover:bg-white/5'
+                      }`}
+                    >
+                      {option.label}{' '}
+                      <span className='text-xs opacity-70'>({option.id})</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <div className='space-y-3'>
               <div className='flex flex-wrap items-center justify-between gap-2'>
-                <label className='font-mono text-xs text-[#6f8096]'>Base URL</label>
+                <label className='font-mono text-xs text-[#6f8096]'>
+                  Base URL
+                </label>
                 <span className='break-all text-right font-mono text-xs text-[#6f8096]'>
                   默认：{defaultBaseUrl}
                 </span>
@@ -359,7 +444,9 @@ export default function Install() {
                   className='install-page-input min-h-11 w-full rounded-lg border border-white/10 bg-[#0a0d13] px-4 py-3 font-mono text-sm text-white outline-none placeholder:text-[#506078]'
                 />
                 <p className='text-xs text-[#6f8096]'>
-                  {isPresetBaseUrl ? '当前使用预设地址，也可以直接编辑。' : `当前生成地址：${normalizedBaseUrl}`}
+                  {isPresetBaseUrl
+                    ? '当前使用预设地址，也可以直接编辑。'
+                    : `当前生成地址：${normalizedBaseUrl}`}
                 </p>
               </div>
             </div>
@@ -390,7 +477,11 @@ export default function Install() {
                 onClick={copyCommand}
                 className='ml-auto inline-flex h-11 items-center gap-2 rounded-lg border border-[#00ff88]/35 bg-[#0b2419] px-4 text-sm font-semibold text-[#d9ffe9] shadow-[0_0_0_1px_rgba(0,255,136,0.06)] transition hover:bg-[#103521] hover:text-white'
               >
-                {copied ? <Check className='h-4 w-4' /> : <Copy className='h-4 w-4' />}
+                {copied ? (
+                  <Check className='h-4 w-4' />
+                ) : (
+                  <Copy className='h-4 w-4' />
+                )}
                 {copied ? '已复制' : `复制 ${selectedPlatform.label} 命令`}
               </button>
             </div>
@@ -401,7 +492,8 @@ export default function Install() {
                   {selectedPlatform.label} command
                 </div>
                 <div className='break-all text-right font-mono text-[11px] text-[#00ff88]'>
-                  model={model} | base={normalizedBaseUrl}
+                  model={model} | reasoning={reasoningEffort} | base=
+                  {normalizedBaseUrl}
                 </div>
               </div>
               <pre className='max-h-[32rem] overflow-auto whitespace-pre-wrap break-all font-mono text-xs leading-6 text-[#d7e1ee]'>

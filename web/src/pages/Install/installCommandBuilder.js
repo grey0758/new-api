@@ -6,11 +6,20 @@ export const PLATFORMS = [
   { id: 'windows', label: 'Windows', icon: Monitor },
 ];
 
-export const INSTALL_MODELS = ['gpt-5.5', 'gpt-5.4'];
+export const INSTALL_MODELS = ['gpt-5.5', 'gpt-5.6-sol'];
+
+export const INSTALL_REASONING_EFFORTS = [
+  { id: 'xhigh', label: '超高' },
+  { id: 'max', label: '最高' },
+];
+
+export const DEFAULT_INSTALL_REASONING_EFFORT = 'xhigh';
 
 export const DEFAULT_INSTALL_COMMAND_CONFIG = {
   models: INSTALL_MODELS,
-  defaultModel: INSTALL_MODELS[0],
+  defaultModel: 'gpt-5.6-sol',
+  reasoningEfforts: INSTALL_REASONING_EFFORTS.map((item) => item.id),
+  defaultReasoningEffort: DEFAULT_INSTALL_REASONING_EFFORT,
   approvalPolicy: 'never',
   sandboxMode: 'danger-full-access',
   supportsWebsockets: false,
@@ -113,6 +122,34 @@ function safeModels(value, fallback) {
   return models.length > 0 ? models : fallback;
 }
 
+function safeReasoningEfforts(value, fallback) {
+  if (!Array.isArray(value)) {
+    return fallback;
+  }
+
+  const allowed = new Set(INSTALL_REASONING_EFFORTS.map((item) => item.id));
+  const efforts = Array.from(
+    new Set(
+      value
+        .map((item) => String(item || '').trim())
+        .filter((item) => allowed.has(item)),
+    ),
+  );
+  return efforts.length > 0 ? efforts : fallback;
+}
+
+export function normalizeInstallReasoningEffort(
+  value,
+  allowedEfforts = DEFAULT_INSTALL_COMMAND_CONFIG.reasoningEfforts,
+) {
+  const effort = String(value || '').trim();
+  return allowedEfforts.includes(effort)
+    ? effort
+    : allowedEfforts.includes(DEFAULT_INSTALL_REASONING_EFFORT)
+      ? DEFAULT_INSTALL_REASONING_EFFORT
+      : allowedEfforts[0];
+}
+
 export function normalizeInstallCommandConfig(value = {}) {
   const config = value && typeof value === 'object' ? value : {};
   const models = safeModels(
@@ -121,6 +158,17 @@ export function normalizeInstallCommandConfig(value = {}) {
   );
   const requestedDefaultModel = String(
     snakeOrCamel(config, 'default_model', 'defaultModel') || '',
+  ).trim();
+  const reasoningEfforts = safeReasoningEfforts(
+    snakeOrCamel(config, 'reasoning_efforts', 'reasoningEfforts'),
+    DEFAULT_INSTALL_COMMAND_CONFIG.reasoningEfforts,
+  );
+  const requestedDefaultReasoningEffort = String(
+    snakeOrCamel(
+      config,
+      'default_reasoning_effort',
+      'defaultReasoningEffort',
+    ) || '',
   ).trim();
   const approvalPolicy = String(
     snakeOrCamel(config, 'approval_policy', 'approvalPolicy') || '',
@@ -132,7 +180,11 @@ export function normalizeInstallCommandConfig(value = {}) {
     snakeOrCamel(config, 'workspace_name', 'workspaceName') || '',
   ).trim();
   const windowsProjectPathStyle = String(
-    snakeOrCamel(config, 'windows_project_path_style', 'windowsProjectPathStyle') || '',
+    snakeOrCamel(
+      config,
+      'windows_project_path_style',
+      'windowsProjectPathStyle',
+    ) || '',
   ).trim();
 
   return {
@@ -140,11 +192,27 @@ export function normalizeInstallCommandConfig(value = {}) {
     models,
     defaultModel: models.includes(requestedDefaultModel)
       ? requestedDefaultModel
-      : models[0],
-    approvalPolicy: ['never', 'on-request', 'on-failure', 'untrusted'].includes(approvalPolicy)
+      : models.includes(DEFAULT_INSTALL_COMMAND_CONFIG.defaultModel)
+        ? DEFAULT_INSTALL_COMMAND_CONFIG.defaultModel
+        : models[0],
+    reasoningEfforts,
+    defaultReasoningEffort: reasoningEfforts.includes(
+      requestedDefaultReasoningEffort,
+    )
+      ? requestedDefaultReasoningEffort
+      : reasoningEfforts.includes(DEFAULT_INSTALL_REASONING_EFFORT)
+        ? DEFAULT_INSTALL_REASONING_EFFORT
+        : reasoningEfforts[0],
+    approvalPolicy: ['never', 'on-request', 'on-failure', 'untrusted'].includes(
+      approvalPolicy,
+    )
       ? approvalPolicy
       : DEFAULT_INSTALL_COMMAND_CONFIG.approvalPolicy,
-    sandboxMode: ['danger-full-access', 'workspace-write', 'read-only'].includes(sandboxMode)
+    sandboxMode: [
+      'danger-full-access',
+      'workspace-write',
+      'read-only',
+    ].includes(sandboxMode)
       ? sandboxMode
       : DEFAULT_INSTALL_COMMAND_CONFIG.sandboxMode,
     supportsWebsockets: Boolean(
@@ -153,9 +221,10 @@ export function normalizeInstallCommandConfig(value = {}) {
     workspaceName: /^[A-Za-z0-9._-]{1,64}$/.test(workspaceName)
       ? workspaceName
       : DEFAULT_INSTALL_COMMAND_CONFIG.workspaceName,
-    windowsProjectPathStyle: windowsProjectPathStyle === 'escaped-backslash'
-      ? 'escaped-backslash'
-      : DEFAULT_INSTALL_COMMAND_CONFIG.windowsProjectPathStyle,
+    windowsProjectPathStyle:
+      windowsProjectPathStyle === 'escaped-backslash'
+        ? 'escaped-backslash'
+        : DEFAULT_INSTALL_COMMAND_CONFIG.windowsProjectPathStyle,
     launchBypassFlag: Boolean(
       snakeOrCamel(config, 'launch_bypass_flag', 'launchBypassFlag'),
     ),
@@ -164,6 +233,15 @@ export function normalizeInstallCommandConfig(value = {}) {
 
 export function installModelsFromConfig(config) {
   return normalizeInstallCommandConfig(config).models;
+}
+
+export function installReasoningEffortsFromConfig(config) {
+  const normalized = normalizeInstallCommandConfig(config);
+  return normalized.reasoningEfforts.map((id) => ({
+    id,
+    label:
+      INSTALL_REASONING_EFFORTS.find((item) => item.id === id)?.label || id,
+  }));
 }
 
 export function buildInstallCommandModels(config) {
@@ -233,31 +311,93 @@ function forceResponsesHttpConfig(template) {
     );
 }
 
-function applyInstallCommandConfig(command, config, platform) {
+function applyInstallCommandConfig(command, config, platform, reasoningEffort) {
   const normalizedConfig = normalizeInstallCommandConfig(config);
+  const normalizedReasoningEffort =
+    normalizeInstallReasoningEffort(
+      reasoningEffort,
+      normalizedConfig.reasoningEfforts,
+    );
   let result = command
-    .replaceAll('"approval_policy":"never"', `"approval_policy":"${normalizedConfig.approvalPolicy}"`)
-    .replaceAll("approval_policy='never'", `approval_policy='${normalizedConfig.approvalPolicy}'`)
-    .replaceAll('approval_policy = "never"', `approval_policy = "${normalizedConfig.approvalPolicy}"`)
-    .replaceAll('"sandbox_mode":"danger-full-access"', `"sandbox_mode":"${normalizedConfig.sandboxMode}"`)
-    .replaceAll("sandbox_mode='danger-full-access'", `sandbox_mode='${normalizedConfig.sandboxMode}'`)
-    .replaceAll('sandbox_mode = "danger-full-access"', `sandbox_mode = "${normalizedConfig.sandboxMode}"`)
-    .replaceAll('"supports_websockets":false', `"supports_websockets":${normalizedConfig.supportsWebsockets ? 'true' : 'false'}`)
-    .replaceAll('supports_websockets=$false', `supports_websockets=$${normalizedConfig.supportsWebsockets ? 'true' : 'false'}`)
-    .replaceAll('supports_websockets = false', `supports_websockets = ${normalizedConfig.supportsWebsockets ? 'true' : 'false'}`)
+    .replaceAll(
+      '"model_reasoning_effort":"high"',
+      `"model_reasoning_effort":"${normalizedReasoningEffort}"`,
+    )
+    .replaceAll(
+      "model_reasoning_effort='high'",
+      `model_reasoning_effort='${normalizedReasoningEffort}'`,
+    )
+    .replaceAll(
+      'model_reasoning_effort = "high"',
+      `model_reasoning_effort = "${normalizedReasoningEffort}"`,
+    )
+    .replaceAll(
+      '"approval_policy":"never"',
+      `"approval_policy":"${normalizedConfig.approvalPolicy}"`,
+    )
+    .replaceAll(
+      "approval_policy='never'",
+      `approval_policy='${normalizedConfig.approvalPolicy}'`,
+    )
+    .replaceAll(
+      'approval_policy = "never"',
+      `approval_policy = "${normalizedConfig.approvalPolicy}"`,
+    )
+    .replaceAll(
+      '"sandbox_mode":"danger-full-access"',
+      `"sandbox_mode":"${normalizedConfig.sandboxMode}"`,
+    )
+    .replaceAll(
+      "sandbox_mode='danger-full-access'",
+      `sandbox_mode='${normalizedConfig.sandboxMode}'`,
+    )
+    .replaceAll(
+      'sandbox_mode = "danger-full-access"',
+      `sandbox_mode = "${normalizedConfig.sandboxMode}"`,
+    )
+    .replaceAll(
+      '"supports_websockets":false',
+      `"supports_websockets":${normalizedConfig.supportsWebsockets ? 'true' : 'false'}`,
+    )
+    .replaceAll(
+      'supports_websockets=$false',
+      `supports_websockets=$${normalizedConfig.supportsWebsockets ? 'true' : 'false'}`,
+    )
+    .replaceAll(
+      'supports_websockets = false',
+      `supports_websockets = ${normalizedConfig.supportsWebsockets ? 'true' : 'false'}`,
+    )
     .replaceAll('opencodex-workspace', normalizedConfig.workspaceName);
 
-  if (platform === 'windows' && normalizedConfig.windowsProjectPathStyle === 'escaped-backslash') {
+  if (
+    platform === 'windows' &&
+    normalizedConfig.windowsProjectPathStyle === 'escaped-backslash'
+  ) {
     result = result
-      .replaceAll("$workDir.Replace('\\\\','/')", "$workDir.Replace('\\\\','\\\\\\\\')")
-      .replaceAll("$workDir.Replace('\\','/')", "$workDir.Replace('\\','\\\\')");
+      .replaceAll(
+        "$workDir.Replace('\\\\','/')",
+        "$workDir.Replace('\\\\','\\\\\\\\')",
+      )
+      .replaceAll(
+        "$workDir.Replace('\\','/')",
+        "$workDir.Replace('\\','\\\\')",
+      );
   }
 
   if (normalizedConfig.launchBypassFlag) {
     result = result
-      .replaceAll('"$CODEX_BIN"', '"$CODEX_BIN" --dangerously-bypass-approvals-and-sandbox')
-      .replaceAll('& $codexCmd.Source', '& $codexCmd.Source --dangerously-bypass-approvals-and-sandbox')
-      .replaceAll('codex --version 2>/dev/null || echo "codex 未找到";', 'codex --version 2>/dev/null || echo "codex 未找到"; codex --dangerously-bypass-approvals-and-sandbox;');
+      .replaceAll(
+        '"$CODEX_BIN"',
+        '"$CODEX_BIN" --dangerously-bypass-approvals-and-sandbox',
+      )
+      .replaceAll(
+        '& $codexCmd.Source',
+        '& $codexCmd.Source --dangerously-bypass-approvals-and-sandbox',
+      )
+      .replaceAll(
+        'codex --version 2>/dev/null || echo "codex 未找到";',
+        'codex --version 2>/dev/null || echo "codex 未找到"; codex --dangerously-bypass-approvals-and-sandbox;',
+      );
   }
 
   return result;
@@ -414,46 +554,65 @@ function hardenWindowsCommandTemplate(template) {
     );
 }
 
-function buildLinuxCommand(apiKey, baseUrl, model, config) {
-  return applyInstallCommandConfig(renderTemplate(
-    forceResponsesHttpConfig(LINUX_CURRENT_COMMAND_TEMPLATE),
-    {
+function buildLinuxCommand(apiKey, baseUrl, model, reasoningEffort, config) {
+  return applyInstallCommandConfig(
+    renderTemplate(forceResponsesHttpConfig(LINUX_CURRENT_COMMAND_TEMPLATE), {
       __API_KEY__: escapeForBashDoubleQuotes(apiKey.trim() || 'YOUR_KEY'),
       __BASE_URL__: escapeForBashDoubleQuotes(
         baseUrl.trim() || 'https://api.example.com/v1',
       ),
-      __MODEL__: escapeForBashDoubleQuotes(model.trim() || 'gpt-5.5'),
-    },
-  ), config, 'linux');
+      __MODEL__: escapeForBashDoubleQuotes(
+        model.trim() || DEFAULT_INSTALL_COMMAND_CONFIG.defaultModel,
+      ),
+    }),
+    config,
+    'linux',
+    reasoningEffort,
+  );
 }
 
-function buildMacosCommand(apiKey, baseUrl, model, config) {
-  return applyInstallCommandConfig(renderTemplate(
-    hardenMacosCommandTemplate(MACOS_BASH_COMMAND_TEMPLATE),
-    {
+function buildMacosCommand(apiKey, baseUrl, model, reasoningEffort, config) {
+  return applyInstallCommandConfig(
+    renderTemplate(hardenMacosCommandTemplate(MACOS_BASH_COMMAND_TEMPLATE), {
       __API_KEY__: escapeForBashDoubleQuotes(apiKey.trim() || 'YOUR_KEY'),
       __BASE_URL__: escapeForBashDoubleQuotes(
         baseUrl.trim() || 'https://api.example.com/v1',
       ),
-      __MODEL__: escapeForBashDoubleQuotes(model.trim() || 'gpt-5.5'),
-    },
-  ), config, 'macos');
+      __MODEL__: escapeForBashDoubleQuotes(
+        model.trim() || DEFAULT_INSTALL_COMMAND_CONFIG.defaultModel,
+      ),
+    }),
+    config,
+    'macos',
+    reasoningEffort,
+  );
 }
 
-function buildWindowsCommand(apiKey, baseUrl, model, config) {
-  return applyInstallCommandConfig(renderTemplate(
-    hardenWindowsCommandTemplate(WINDOWS_COMMAND_TEMPLATE),
-    {
+function buildWindowsCommand(apiKey, baseUrl, model, reasoningEffort, config) {
+  return applyInstallCommandConfig(
+    renderTemplate(hardenWindowsCommandTemplate(WINDOWS_COMMAND_TEMPLATE), {
       __API_KEY__: quotePowerShell(apiKey.trim() || 'YOUR_KEY'),
       __BASE_URL__: quotePowerShell(
         baseUrl.trim() || 'https://api.example.com/v1',
       ),
-      __MODEL__: quotePowerShell(model.trim() || 'gpt-5.5'),
-    },
-  ), config, 'windows');
+      __MODEL__: quotePowerShell(
+        model.trim() || DEFAULT_INSTALL_COMMAND_CONFIG.defaultModel,
+      ),
+    }),
+    config,
+    'windows',
+    reasoningEffort,
+  );
 }
 
-export function buildInstallCommand(os, apiKey, baseUrl, model, config = {}) {
+export function buildInstallCommand(
+  os,
+  apiKey,
+  baseUrl,
+  model,
+  reasoningEffort = DEFAULT_INSTALL_REASONING_EFFORT,
+  config = {},
+) {
   const codexBaseUrl = normalizeCodexBaseUrl(baseUrl);
   const normalizedConfig = normalizeInstallCommandConfig(config);
   const selectedModel = normalizedConfig.models.includes(model)
@@ -461,12 +620,30 @@ export function buildInstallCommand(os, apiKey, baseUrl, model, config = {}) {
     : normalizedConfig.defaultModel;
 
   if (os === 'windows') {
-    return buildWindowsCommand(apiKey, codexBaseUrl, selectedModel, normalizedConfig);
+    return buildWindowsCommand(
+      apiKey,
+      codexBaseUrl,
+      selectedModel,
+      reasoningEffort,
+      normalizedConfig,
+    );
   }
 
   if (os === 'macos') {
-    return buildMacosCommand(apiKey, codexBaseUrl, selectedModel, normalizedConfig);
+    return buildMacosCommand(
+      apiKey,
+      codexBaseUrl,
+      selectedModel,
+      reasoningEffort,
+      normalizedConfig,
+    );
   }
 
-  return buildLinuxCommand(apiKey, codexBaseUrl, selectedModel, normalizedConfig);
+  return buildLinuxCommand(
+    apiKey,
+    codexBaseUrl,
+    selectedModel,
+    reasoningEffort,
+    normalizedConfig,
+  );
 }

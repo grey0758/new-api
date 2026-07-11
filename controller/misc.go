@@ -27,6 +27,8 @@ const installCommandConfigOptionKey = "InstallCommandConfig"
 type installCommandConfig struct {
 	Models                  []string `json:"models,omitempty"`
 	DefaultModel            string   `json:"default_model,omitempty"`
+	ReasoningEfforts        []string `json:"reasoning_efforts,omitempty"`
+	DefaultReasoningEffort  string   `json:"default_reasoning_effort,omitempty"`
 	ApprovalPolicy          string   `json:"approval_policy"`
 	SandboxMode             string   `json:"sandbox_mode"`
 	SupportsWebsockets      bool     `json:"supports_websockets"`
@@ -37,8 +39,10 @@ type installCommandConfig struct {
 
 func defaultInstallCommandConfig() installCommandConfig {
 	return installCommandConfig{
-		Models:                  []string{"gpt-5.5", "gpt-5.4"},
-		DefaultModel:            "gpt-5.5",
+		Models:                  []string{"gpt-5.5", "gpt-5.6-sol"},
+		DefaultModel:            "gpt-5.6-sol",
+		ReasoningEfforts:        []string{"xhigh", "max"},
+		DefaultReasoningEffort:  "xhigh",
 		ApprovalPolicy:          "never",
 		SandboxMode:             "danger-full-access",
 		SupportsWebsockets:      false,
@@ -59,6 +63,12 @@ func publicInstallCommandConfig(raw string) installCommandConfig {
 			if isSafeInstallModel(parsed.DefaultModel) {
 				config.DefaultModel = parsed.DefaultModel
 			}
+			if len(parsed.ReasoningEfforts) > 0 {
+				config.ReasoningEfforts = sanitizeInstallReasoningEfforts(parsed.ReasoningEfforts, config.ReasoningEfforts)
+			}
+			if isSafeInstallReasoningEffort(parsed.DefaultReasoningEffort) {
+				config.DefaultReasoningEffort = parsed.DefaultReasoningEffort
+			}
 			if parsed.ApprovalPolicy != "" {
 				config.ApprovalPolicy = sanitizeApprovalPolicy(parsed.ApprovalPolicy, config.ApprovalPolicy)
 			}
@@ -77,6 +87,9 @@ func publicInstallCommandConfig(raw string) installCommandConfig {
 	}
 	if !containsString(config.Models, config.DefaultModel) {
 		config.DefaultModel = config.Models[0]
+	}
+	if !containsString(config.ReasoningEfforts, config.DefaultReasoningEffort) {
+		config.DefaultReasoningEffort = config.ReasoningEfforts[0]
 	}
 	return config
 }
@@ -142,6 +155,35 @@ func sanitizeInstallModels(values []string, fallback []string) []string {
 		return fallback
 	}
 	return models
+}
+
+func isSafeInstallReasoningEffort(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "xhigh", "max":
+		return true
+	default:
+		return false
+	}
+}
+
+func sanitizeInstallReasoningEfforts(values []string, fallback []string) []string {
+	efforts := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if !isSafeInstallReasoningEffort(value) {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		efforts = append(efforts, value)
+	}
+	if len(efforts) == 0 {
+		return fallback
+	}
+	return efforts
 }
 
 func containsString(values []string, target string) bool {

@@ -152,6 +152,35 @@ func TestGetAllTokensMasksKeyInResponse(t *testing.T) {
 	}
 }
 
+func TestGetAllTokensSupportsOldestFirstOrder(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	oldest := seedToken(t, db, 1, "initial-token", "oldest1234token5678")
+	seedToken(t, db, 1, "new-token", "newest1234token5678")
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/api/token/?p=1&size=1&order=oldest", nil, 1)
+	ctx.Request.URL.RawQuery = "p=1&size=1&order=oldest"
+	GetAllTokens(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	if !response.Success {
+		t.Fatalf("expected success response, got message: %s", response.Message)
+	}
+
+	var page tokenPageResponse
+	if err := common.Unmarshal(response.Data, &page); err != nil {
+		t.Fatalf("failed to decode token page response: %v", err)
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("expected exactly one token, got %d", len(page.Items))
+	}
+	if page.Items[0].ID != oldest.Id {
+		t.Fatalf("expected oldest token id %d, got %d", oldest.Id, page.Items[0].ID)
+	}
+	if page.Items[0].Key != oldest.GetMaskedKey() {
+		t.Fatalf("expected masked oldest key %q, got %q", oldest.GetMaskedKey(), page.Items[0].Key)
+	}
+}
+
 func TestSearchTokensMasksKeyInResponse(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	token := seedToken(t, db, 1, "searchable-token", "ijkl1234mnop5678")

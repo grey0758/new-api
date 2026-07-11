@@ -2,8 +2,13 @@ import assert from 'node:assert/strict';
 
 import {
   buildInstallCommand,
+  DEFAULT_INSTALL_COMMAND_CONFIG,
+  DEFAULT_INSTALL_REASONING_EFFORT,
+  INSTALL_MODELS,
+  INSTALL_REASONING_EFFORTS,
   normalizeInstallCommandConfig,
   normalizeCodexBaseUrl,
+  normalizeInstallReasoningEffort,
 } from '../src/pages/Install/installCommandBuilder.js';
 
 const platforms = ['linux', 'macos', 'windows'];
@@ -12,6 +17,7 @@ const goodMarkers = [
   'sandbox_mode = "danger-full-access"',
   'wire_api = "responses"',
   'supports_websockets = false',
+  'model_reasoning_effort = "xhigh"',
 ];
 const badMarkers = [
   'approval_policy = "on-request"',
@@ -36,13 +42,26 @@ assert.equal(
   normalizeCodexBaseUrl('https://api.opencodex.uk/v1/'),
   'https://api.opencodex.uk/v1',
 );
+assert.deepEqual(INSTALL_MODELS, ['gpt-5.5', 'gpt-5.6-sol']);
+assert.equal(DEFAULT_INSTALL_COMMAND_CONFIG.defaultModel, 'gpt-5.6-sol');
+assert.equal(DEFAULT_INSTALL_REASONING_EFFORT, 'xhigh');
+assert.deepEqual(
+  INSTALL_REASONING_EFFORTS.map((item) => [item.id, item.label]),
+  [
+    ['xhigh', '超高'],
+    ['max', '最高'],
+  ],
+);
+assert.equal(normalizeInstallReasoningEffort('xhigh'), 'xhigh');
+assert.equal(normalizeInstallReasoningEffort('invalid'), 'xhigh');
 
 for (const platform of platforms) {
   const command = buildInstallCommand(
     platform,
     'DUMMY_KEY',
     'https://api.opencodex.uk',
-    'gpt-5.5',
+    'gpt-5.6-sol',
+    'xhigh',
   );
 
   for (const marker of goodMarkers) {
@@ -80,7 +99,8 @@ const linuxCommand = buildInstallCommand(
   'linux',
   'DUMMY_KEY',
   'https://api.opencodex.uk',
-  'gpt-5.5',
+  'gpt-5.6-sol',
+  'xhigh',
 );
 assert(
   linuxCommand.includes('install_node') &&
@@ -94,7 +114,8 @@ const macosCommand = buildInstallCommand(
   'macos',
   'DUMMY_KEY',
   'https://api.opencodex.uk',
-  'gpt-5.5',
+  'gpt-5.6-sol',
+  'xhigh',
 );
 assert(
   macosCommand.includes('WORK_DIR="$HOME/opencodex-workspace"') &&
@@ -106,7 +127,8 @@ const windowsCommand = buildInstallCommand(
   'windows',
   'DUMMY_KEY',
   'https://api.opencodex.uk',
-  'gpt-5.5',
+  'gpt-5.6-sol',
+  'xhigh',
 );
 assert(
   windowsCommand.includes('opencodex-workspace') &&
@@ -130,13 +152,34 @@ assert(
   'windows command must include the canonical native optional dependency repair flow',
 );
 
+for (const platform of platforms) {
+  for (const effort of ['xhigh', 'max']) {
+    const command = buildInstallCommand(
+      platform,
+      'DUMMY_KEY',
+      'https://api.opencodex.uk',
+      'gpt-5.6-sol',
+      effort,
+    );
+    const configMarker =
+      platform === 'windows'
+        ? `model_reasoning_effort='${effort}'`
+        : `"model_reasoning_effort":"${effort}"`;
+    assert(
+      command.includes(configMarker) &&
+        command.includes(`model_reasoning_effort = "${effort}"`),
+      `${platform} command must use selected reasoning effort ${effort}`,
+    );
+  }
+}
+
 const customConfig = normalizeInstallCommandConfig({
   approval_policy: 'on-request',
   sandbox_mode: 'workspace-write',
   supports_websockets: true,
   workspace_name: 'workspace-a',
-  models: ['gpt-5.4', 'gpt-5.5'],
-  default_model: 'gpt-5.4',
+  models: ['gpt-5.5', 'gpt-5.6-sol'],
+  default_model: 'gpt-5.5',
 });
 
 const customWindowsCommand = buildInstallCommand(
@@ -144,6 +187,7 @@ const customWindowsCommand = buildInstallCommand(
   'DUMMY_KEY',
   'https://api.opencodex.uk',
   'gpt-5.5',
+  'xhigh',
   customConfig,
 );
 
@@ -162,6 +206,6 @@ const fallbackConfig = normalizeInstallCommandConfig({
 assert.equal(fallbackConfig.approvalPolicy, 'never');
 assert.equal(fallbackConfig.sandboxMode, 'danger-full-access');
 assert.equal(fallbackConfig.workspaceName, 'opencodex-workspace');
-assert.equal(fallbackConfig.defaultModel, 'gpt-5.5');
+assert.equal(fallbackConfig.defaultModel, 'gpt-5.6-sol');
 
 console.log('install command builder checks passed');
