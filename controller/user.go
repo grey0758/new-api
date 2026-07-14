@@ -142,14 +142,23 @@ func Register(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserPasswordRegisterDisabled)
 		return
 	}
-	var user model.User
-	err := json.NewDecoder(c.Request.Body).Decode(&user)
+	type registerRequest struct {
+		model.User
+		ChallengeToken string `json:"challengeToken"`
+	}
+	var request registerRequest
+	err := json.NewDecoder(c.Request.Body).Decode(&request)
 	if err != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
+	user := request.User
 	if err := common.Validate.Struct(&user); err != nil {
 		common.ApiErrorI18n(c, i18n.MsgUserInputInvalid, map[string]any{"Error": err.Error()})
+		return
+	}
+	if err := service.ConsumeRegistrationChallenge(user.Username, request.ChallengeToken); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgUserChallengeInvalid)
 		return
 	}
 	if common.EmailVerificationEnabled {

@@ -86,6 +86,8 @@ const (
 	MsgUserRequire2FA                = "user.require_2fa"
 	MsgUserEmailVerificationRequired = "user.email_verification_required"
 	MsgUserVerificationCodeError     = "user.verification_code_error"
+	MsgUserChallengeInvalid          = "user.registration_challenge_invalid"
+	MsgUserChallengeUnavailable      = "user.registration_challenge_unavailable"
 	MsgUserInputInvalid              = "user.input_invalid"
 	MsgUserNoPermissionSameLevel     = "user.no_permission_same_level"
 	MsgUserNoPermissionHigherLevel   = "user.no_permission_higher_level"

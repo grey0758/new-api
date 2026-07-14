@@ -31,6 +31,8 @@ import {
   setUserData,
   onDiscordOAuthClicked,
   onCustomOAuthClicked,
+  RegistrationChallengeError,
+  solveRegistrationChallenge,
 } from '../../helpers';
 import Turnstile from 'react-turnstile';
 import {
@@ -225,20 +227,29 @@ const RegisterForm = () => {
       return;
     }
     if (username && password) {
-      if (turnstileEnabled && turnstileToken === '') {
-        showInfo('请稍后几秒重试，Turnstile 正在检查用户环境！');
-        return;
-      }
       setRegisterLoading(true);
       try {
-        if (!affCode) {
-          affCode = localStorage.getItem('aff');
-        }
-        inputs.aff_code = affCode;
-        const res = await API.post(
-          `/api/user/register?turnstile=${turnstileToken}`,
-          inputs,
+        const challengeResponse = await API.post(
+          '/api/user/register/challenge',
+          { target: username },
         );
+        const {
+          success: challengeSuccess,
+          message: challengeMessage,
+          data: challenge,
+        } = challengeResponse.data;
+        if (!challengeSuccess) {
+          throw new RegistrationChallengeError(
+            challengeMessage || '无法获取注册安全验证，请稍后重试',
+          );
+        }
+        const challengeToken = await solveRegistrationChallenge(challenge);
+        const currentAffCode = affCode || localStorage.getItem('aff');
+        const res = await API.post('/api/user/register', {
+          ...inputs,
+          aff_code: currentAffCode,
+          challengeToken,
+        });
         const { success, message } = res.data;
         if (success) {
           navigate('/login');
@@ -247,7 +258,11 @@ const RegisterForm = () => {
           showError(message);
         }
       } catch (error) {
-        showError('注册失败，请重试');
+        if (error instanceof RegistrationChallengeError) {
+          showError(error.message);
+        } else {
+          showError('注册失败，请重试');
+        }
       } finally {
         setRegisterLoading(false);
       }
@@ -781,22 +796,22 @@ const RegisterForm = () => {
         style={{ top: '50%', left: '-120px' }}
       />
       <div className='w-full max-w-sm mt-[60px]'>
-        {showEmailRegister ||
-        !hasOAuthRegisterOptions
+        {showEmailRegister || !hasOAuthRegisterOptions
           ? renderEmailRegisterForm()
           : renderOAuthOptions()}
         {renderWeChatLoginModal()}
 
-        {turnstileEnabled && (
-          <div className='flex justify-center mt-6'>
-            <Turnstile
-              sitekey={turnstileSiteKey}
-              onVerify={(token) => {
-                setTurnstileToken(token);
-              }}
-            />
-          </div>
-        )}
+        {turnstileEnabled &&
+          (showEmailVerification || showWeChatLoginModal) && (
+            <div className='flex justify-center mt-6'>
+              <Turnstile
+                sitekey={turnstileSiteKey}
+                onVerify={(token) => {
+                  setTurnstileToken(token);
+                }}
+              />
+            </div>
+          )}
       </div>
     </div>
   );

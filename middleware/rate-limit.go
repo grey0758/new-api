@@ -108,6 +108,15 @@ func CriticalRateLimit() func(c *gin.Context) {
 	return defNext
 }
 
+// RegistrationChallengeRateLimit keeps challenge issuance separate from the
+// registration submission budget while reusing the configured critical limit.
+func RegistrationChallengeRateLimit() func(c *gin.Context) {
+	if common.CriticalRateLimitEnable {
+		return rateLimitFactory(common.CriticalRateLimitNum, common.CriticalRateLimitDuration, "RC")
+	}
+	return defNext
+}
+
 func DownloadRateLimit() func(c *gin.Context) {
 	return rateLimitFactory(common.DownloadRateLimitNum, common.DownloadRateLimitDuration, "DW")
 }
