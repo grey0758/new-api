@@ -5,6 +5,7 @@ on:
     tags:
       - '*'
       - '!nightly*'
+      - '!opencodex-prod-*'
   workflow_dispatch:
     inputs:
       tag:

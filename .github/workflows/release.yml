@@ -12,6 +12,7 @@ on:
     tags:
       - '*'
       - '!*-alpha*'
+      - '!opencodex-prod-*'
 
 jobs:
   linux:

@@ -1,0 +1,124 @@
+name: Publish OpenCodex production image
+
+on:
+  push:
+    tags:
+      - "opencodex-prod-*"
+
+concurrency:
+  group: opencodex-production-image-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    name: Build, publish, and sign linux/amd64
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.release.outputs.image }}
+      digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify release tag belongs to main
+        shell: bash
+        run: |
+          git fetch origin main --no-tags
+          release_sha="$(git rev-parse HEAD)"
+          if ! git merge-base --is-ancestor "$release_sha" origin/main; then
+            echo "Release tag must point to a commit reachable from origin/main" >&2
+            exit 1
+          fi
+
+      - name: Resolve immutable release metadata
+        id: release
+        shell: bash
+        run: |
+          image="${REGISTRY}/${GITHUB_REPOSITORY,,}"
+          release_tag="${GITHUB_REF_NAME}"
+          release_sha="$(git rev-parse HEAD)"
+          short_sha="$(git rev-parse --short=12 HEAD)"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "release_sha=$release_sha" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$release_tag" > VERSION
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate OCI metadata
+        id: metadata
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ steps.release.outputs.image }}
+          tags: |
+            type=raw,value=${{ steps.release.outputs.release_tag }}
+            type=raw,value=git-${{ steps.release.outputs.short_sha }}
+          labels: |
+            org.opencontainers.image.title=OpenCodex NewAPI
+            org.opencontainers.image.description=Shared production NewAPI image for sgp001 instances
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.release.outputs.release_sha }}
+            org.opencontainers.image.version=${{ steps.release.outputs.release_tag }}
+
+      - name: Build and push immutable image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          annotations: ${{ steps.metadata.outputs.annotations }}
+          cache-from: type=gha,scope=opencodex-production-amd64
+          cache-to: type=gha,mode=max,scope=opencodex-production-amd64
+          provenance: mode=max
+          sbom: true
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Sign immutable image digest
+        shell: bash
+        env:
+          IMAGE: ${{ steps.release.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "$IMAGE@$DIGEST"
+
+      - name: Publish release summary
+        shell: bash
+        env:
+          IMAGE: ${{ steps.release.outputs.image }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+          RELEASE_SHA: ${{ steps.release.outputs.release_sha }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo '## OpenCodex production image'
+            echo
+            echo "- Git tag: \`$RELEASE_TAG\`"
+            echo "- Git commit: \`$RELEASE_SHA\`"
+            echo "- Image tag: \`$IMAGE:$RELEASE_TAG\`"
+            echo "- Immutable image: \`$IMAGE@$DIGEST\`"
+            echo "- Platform: \`linux/amd64\`"
+          } >> "$GITHUB_STEP_SUMMARY"
