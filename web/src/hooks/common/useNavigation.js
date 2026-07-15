@@ -52,6 +52,7 @@ export const useNavigation = (t, docsLink, headerNavModules, userState) => {
       docs: true,
       install: true,
       ops: true,
+      customerMaintenance: false,
       about: false,
     };
 
@@ -100,6 +101,11 @@ export const useNavigation = (t, docsLink, headerNavModules, userState) => {
         to: '/newapi-ops',
       },
       {
+        text: t('客户维护'),
+        itemKey: 'customerMaintenance',
+        to: '/opencodex-customer-maintenance',
+      },
+      {
         text: t('关于'),
         itemKey: 'about',
         to: '/about',
@@ -111,8 +117,8 @@ export const useNavigation = (t, docsLink, headerNavModules, userState) => {
       if (link.itemKey === 'docs') {
         return docsLink && isModuleEnabled(modules, 'docs');
       }
-      if (link.itemKey === 'ops') {
-        return canUseOps && isModuleEnabled(modules, 'ops');
+      if (link.itemKey === 'ops' || link.itemKey === 'customerMaintenance') {
+        return canUseOps && isModuleEnabled(modules, link.itemKey);
       }
       return isModuleEnabled(modules, link.itemKey);
     });

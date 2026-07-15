@@ -52,6 +52,7 @@ export default function SettingsHeaderNavModules(props) {
       link: '/install/',
     },
     ops: true,
+    customerMaintenance: false,
     about: true,
   });
 
@@ -104,6 +105,7 @@ export default function SettingsHeaderNavModules(props) {
         link: '/install/',
       },
       ops: true,
+      customerMaintenance: false,
       about: true,
     };
     setHeaderNavModules(defaultModules);
@@ -173,6 +175,9 @@ export default function SettingsHeaderNavModules(props) {
         if (modules.ops === undefined) {
           modules.ops = true;
         }
+        if (modules.customerMaintenance === undefined) {
+          modules.customerMaintenance = false;
+        }
 
         setHeaderNavModules(modules);
       } catch (error) {
@@ -190,6 +195,7 @@ export default function SettingsHeaderNavModules(props) {
             link: '/install/',
           },
           ops: true,
+          customerMaintenance: false,
           about: true,
         };
         setHeaderNavModules(defaultModules);
@@ -229,6 +235,11 @@ export default function SettingsHeaderNavModules(props) {
       key: 'ops',
       title: t('兑换运维'),
       description: t('兑换码文案生成页面'),
+    },
+    {
+      key: 'customerMaintenance',
+      title: t('客户维护'),
+      description: t('微信绑定和订阅到期通知'),
     },
     {
       key: 'about',

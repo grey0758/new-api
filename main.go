@@ -115,6 +115,9 @@ func main() {
 	// Subscription quota reset task (daily/weekly/monthly/custom)
 	service.StartSubscriptionQuotaResetTask()
 
+	// OpenCodex customer-maintenance expiry notification reconciliation.
+	service.StartCustomerMaintenanceNotificationTask()
+
 	// Wire task polling adaptor factory (breaks service -> relay import cycle)
 	service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {
 		a := relay.GetTaskAdaptor(platform)

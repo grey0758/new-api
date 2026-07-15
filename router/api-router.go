@@ -180,6 +180,16 @@ func SetApiRouter(router *gin.Engine) {
 			subscriptionAdminRoute.DELETE("/user_subscriptions/:id", controller.AdminDeleteUserSubscription)
 		}
 
+		customerMaintenanceRoute := apiRouter.Group("/opencodex/customer-maintenance")
+		customerMaintenanceRoute.Use(middleware.AdminAuth())
+		{
+			customerMaintenanceRoute.GET("/customers", controller.GetCustomerMaintenanceCustomers)
+			customerMaintenanceRoute.PUT("/customers/:id/contact", controller.UpdateCustomerMaintenanceContact)
+			customerMaintenanceRoute.GET("/notifications", controller.GetCustomerMaintenanceNotifications)
+			customerMaintenanceRoute.POST("/notifications/backfill", controller.BackfillCustomerMaintenanceNotifications)
+			customerMaintenanceRoute.POST("/notifications/:id/acknowledge", controller.AcknowledgeCustomerMaintenanceNotification)
+		}
+
 		// Subscription payment callbacks (no auth)
 		apiRouter.POST("/subscription/epay/notify", controller.SubscriptionEpayNotify)
 		apiRouter.GET("/subscription/epay/notify", controller.SubscriptionEpayNotify)
