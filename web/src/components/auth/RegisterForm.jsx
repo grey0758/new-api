@@ -120,9 +120,9 @@ const RegisterForm = () => {
     searchParams.get('chat_oidc') === '1' ? searchParams.get('next') : '';
   const isChatOIDCFlow = Boolean(
     chatOIDCNext &&
-      chatOIDCNext.startsWith(
-        'https://api.open-codex.com/api/chat-oidc/authorize',
-      ),
+    chatOIDCNext.startsWith(
+      'https://api.open-codex.com/api/chat-oidc/authorize',
+    ),
   );
   const loginPath = isChatOIDCFlow
     ? `/login?chat_oidc=1&next=${encodeURIComponent(chatOIDCNext)}`
@@ -155,12 +155,12 @@ const RegisterForm = () => {
     (status.custom_oauth_providers || []).length > 0;
   const hasOAuthRegisterOptions = Boolean(
     status.github_oauth ||
-      status.discord_oauth ||
-      status.oidc_enabled ||
-      status.wechat_login ||
-      status.linuxdo_oauth ||
-      status.telegram_oauth ||
-      hasCustomOAuthProviders,
+    status.discord_oauth ||
+    status.oidc_enabled ||
+    status.wechat_login ||
+    status.linuxdo_oauth ||
+    status.telegram_oauth ||
+    hasCustomOAuthProviders,
   );
 
   const [showEmailVerification, setShowEmailVerification] = useState(false);
@@ -751,7 +751,7 @@ const RegisterForm = () => {
                 <Text>
                   {t('已有账户？')}{' '}
                   <Link
-                    to='/login'
+                    to={loginPath}
                     className='text-blue-600 hover:text-blue-800 font-medium'
                   >
                     {t('登录')}
