@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
@@ -32,13 +33,26 @@ const (
 	chatOIDCIssuer              = "https://api.open-codex.com/api/chat-oidc"
 	chatOIDCDefaultClientID     = "opencodex-matrix-synapse"
 	chatOIDCDefaultRedirectURI  = "https://matrix.open-codex.com/_synapse/client/oidc/callback"
+	chatOIDCWebDefaultClientID  = "opencodex-web"
+	chatOIDCWebDefaultRedirect  = "https://open-codex.com/api/account/sso/callback/"
+	chatOIDCWebDefaultLogoutURL = "https://open-codex.com/"
 	chatOIDCDefaultPostLoginURL = "https://api.open-codex.com/api/chat-oidc/authorize"
 	chatOIDCKeyID               = "opencodex-chat-oidc-rs256"
 )
 
 var (
-	chatOIDCState = newChatOIDCStore()
+	chatOIDCState                = newChatOIDCStore()
+	chatOIDCPKCEChallengePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+	chatOIDCPKCEVerifierPattern  = regexp.MustCompile(`^[A-Za-z0-9._~-]{43,128}$`)
 )
+
+type chatOIDCClient struct {
+	ID           string
+	RedirectURI  string
+	Secret       string
+	RequirePKCE  bool
+	IssueSession bool
+}
 
 type chatOIDCStore struct {
 	mutex        sync.Mutex
@@ -47,12 +61,14 @@ type chatOIDCStore struct {
 }
 
 type chatOIDCCode struct {
-	UserID      int
-	ClientID    string
-	RedirectURI string
-	Scope       string
-	Nonce       string
-	ExpiresAt   time.Time
+	UserID              int
+	ClientID            string
+	RedirectURI         string
+	Scope               string
+	Nonce               string
+	CodeChallenge       string
+	CodeChallengeMethod string
+	ExpiresAt           time.Time
 }
 
 type chatOIDCAccessToken struct {
@@ -87,12 +103,14 @@ func ChatOIDCDiscovery(c *gin.Context) {
 		"authorization_endpoint":                chatOIDCIssuer + "/authorize",
 		"token_endpoint":                        chatOIDCIssuer + "/token",
 		"userinfo_endpoint":                     chatOIDCIssuer + "/userinfo",
+		"end_session_endpoint":                  chatOIDCIssuer + "/logout",
 		"jwks_uri":                              chatOIDCIssuer + "/jwks",
 		"response_types_supported":              []string{"code"},
 		"grant_types_supported":                 []string{"authorization_code"},
 		"subject_types_supported":               []string{"public"},
 		"id_token_signing_alg_values_supported": []string{"RS256"},
-		"token_endpoint_auth_methods_supported": []string{"client_secret_basic", "client_secret_post"},
+		"token_endpoint_auth_methods_supported": []string{"client_secret_basic", "client_secret_post", "none"},
+		"code_challenge_methods_supported":      []string{"S256"},
 		"scopes_supported":                      []string{"openid", "profile", "email"},
 		"claims_supported": []string{
 			"sub",
@@ -141,8 +159,15 @@ func ChatOIDCAuthorize(c *gin.Context) {
 	}
 	clientID := c.Query("client_id")
 	redirectURI := c.Query("redirect_uri")
-	if clientID != chatOIDCClientID() || redirectURI != chatOIDCRedirectURI() {
+	client, ok := chatOIDCFindClient(clientID, redirectURI)
+	if !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
+		return
+	}
+	codeChallenge := strings.TrimSpace(c.Query("code_challenge"))
+	codeChallengeMethod := strings.TrimSpace(c.Query("code_challenge_method"))
+	if client.RequirePKCE && (codeChallengeMethod != "S256" || !chatOIDCPKCEChallengePattern.MatchString(codeChallenge)) {
+		chatOIDCAuthorizeError(c, http.StatusBadRequest, redirectURI, c.Query("state"), "invalid_request", "S256 PKCE is required")
 		return
 	}
 	if !chatOIDCHasOpenIDScope(c.Query("scope")) {
@@ -168,12 +193,14 @@ func ChatOIDCAuthorize(c *gin.Context) {
 		return
 	}
 	chatOIDCState.storeCode(code, chatOIDCCode{
-		UserID:      user.Id,
-		ClientID:    clientID,
-		RedirectURI: redirectURI,
-		Scope:       c.Query("scope"),
-		Nonce:       c.Query("nonce"),
-		ExpiresAt:   time.Now().Add(2 * time.Minute),
+		UserID:              user.Id,
+		ClientID:            clientID,
+		RedirectURI:         redirectURI,
+		Scope:               c.Query("scope"),
+		Nonce:               c.Query("nonce"),
+		CodeChallenge:       codeChallenge,
+		CodeChallengeMethod: codeChallengeMethod,
+		ExpiresAt:           time.Now().Add(2 * time.Minute),
 	})
 
 	values := url.Values{}
@@ -193,18 +220,31 @@ func ChatOIDCToken(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported_grant_type"})
 		return
 	}
-	clientID, clientSecret, ok := c.Request.BasicAuth()
-	if !ok {
+	clientID, clientSecret, hasBasicAuth := c.Request.BasicAuth()
+	if !hasBasicAuth {
 		clientID = c.PostForm("client_id")
 		clientSecret = c.PostForm("client_secret")
 	}
-	if clientID != chatOIDCClientID() || clientSecret == "" || clientSecret != os.Getenv("CHAT_OIDC_CLIENT_SECRET") {
+	redirectURI := c.PostForm("redirect_uri")
+	client, ok := chatOIDCFindClient(clientID, redirectURI)
+	if !ok ||
+		(client.Secret != "" && (clientSecret == "" || subtle.ConstantTimeCompare([]byte(clientSecret), []byte(client.Secret)) != 1)) ||
+		(client.Secret == "" && clientSecret != "") {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid_client"})
 		return
 	}
 	codeValue := c.PostForm("code")
-	code, ok := chatOIDCState.consumeCode(codeValue)
-	if !ok || code.ClientID != clientID || code.RedirectURI != c.PostForm("redirect_uri") {
+	codeVerifier := strings.TrimSpace(c.PostForm("code_verifier"))
+	code, ok := chatOIDCState.consumeCode(codeValue, func(code chatOIDCCode) bool {
+		if code.ClientID != clientID || code.RedirectURI != redirectURI {
+			return false
+		}
+		if client.RequirePKCE {
+			return chatOIDCVerifyPKCE(code.CodeChallenge, code.CodeChallengeMethod, codeVerifier)
+		}
+		return true
+	})
+	if !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_grant"})
 		return
 	}
@@ -220,6 +260,13 @@ func ChatOIDCToken(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_grant"})
 		return
 	}
+	if client.IssueSession {
+		if err := chatOIDCSaveLoginSession(c, user); err != nil {
+			common.SysError("chat oidc session save error: " + err.Error())
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
+			return
+		}
+	}
 
 	accessToken, err := randomURLToken(32)
 	if err != nil {
@@ -232,7 +279,7 @@ func ChatOIDCToken(c *gin.Context) {
 		ExpiresAt: time.Now().Add(10 * time.Minute),
 	})
 
-	idToken, err := chatOIDCIDToken(user, code.Nonce)
+	idToken, err := chatOIDCIDToken(user, code.Nonce, code.ClientID)
 	if err != nil {
 		common.SysError("chat oidc id token error: " + err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
@@ -269,6 +316,26 @@ func ChatOIDCUserInfo(c *gin.Context) {
 	c.JSON(http.StatusOK, chatOIDCUserClaims(user))
 }
 
+func ChatOIDCLogout(c *gin.Context) {
+	if !chatOIDCEnabled() {
+		c.JSON(http.StatusNotFound, gin.H{"error": "chat_oidc_disabled"})
+		return
+	}
+	redirectURI := strings.TrimSpace(c.Query("post_logout_redirect_uri"))
+	if redirectURI != chatOIDCWebLogoutRedirectURI() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
+		return
+	}
+	session := sessions.Default(c)
+	session.Clear()
+	if err := session.Save(); err != nil {
+		common.SysError("chat oidc logout session error: " + err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
+		return
+	}
+	c.Redirect(http.StatusFound, redirectURI)
+}
+
 func (s *chatOIDCStore) storeCode(code string, data chatOIDCCode) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -276,15 +343,16 @@ func (s *chatOIDCStore) storeCode(code string, data chatOIDCCode) {
 	s.authCodes[code] = data
 }
 
-func (s *chatOIDCStore) consumeCode(code string) (chatOIDCCode, bool) {
+func (s *chatOIDCStore) consumeCode(code string, validate func(chatOIDCCode) bool) (chatOIDCCode, bool) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	s.cleanupLocked(time.Now())
 	data, ok := s.authCodes[code]
-	if ok {
-		delete(s.authCodes, code)
+	if !ok || (validate != nil && !validate(data)) {
+		return chatOIDCCode{}, false
 	}
-	return data, ok
+	delete(s.authCodes, code)
+	return data, true
 }
 
 func (s *chatOIDCStore) storeAccessToken(token string, data chatOIDCAccessToken) {
@@ -334,12 +402,80 @@ func chatOIDCRedirectURI() string {
 	return chatOIDCDefaultRedirectURI
 }
 
+func chatOIDCWebClientEnabled() bool {
+	value := strings.TrimSpace(os.Getenv("OPENCODEX_WEB_OIDC_ENABLED"))
+	return value == "" || strings.EqualFold(value, "true")
+}
+
+func chatOIDCWebClientID() string {
+	if value := strings.TrimSpace(os.Getenv("OPENCODEX_WEB_OIDC_CLIENT_ID")); value != "" {
+		return value
+	}
+	return chatOIDCWebDefaultClientID
+}
+
+func chatOIDCWebRedirectURI() string {
+	if value := strings.TrimSpace(os.Getenv("OPENCODEX_WEB_OIDC_REDIRECT_URI")); value != "" {
+		return value
+	}
+	return chatOIDCWebDefaultRedirect
+}
+
+func chatOIDCWebLogoutRedirectURI() string {
+	if value := strings.TrimSpace(os.Getenv("OPENCODEX_WEB_OIDC_LOGOUT_REDIRECT_URI")); value != "" {
+		return value
+	}
+	return chatOIDCWebDefaultLogoutURL
+}
+
+func chatOIDCClients() []chatOIDCClient {
+	clients := []chatOIDCClient{
+		{
+			ID:          chatOIDCClientID(),
+			RedirectURI: chatOIDCRedirectURI(),
+			Secret:      os.Getenv("CHAT_OIDC_CLIENT_SECRET"),
+		},
+	}
+	if chatOIDCWebClientEnabled() {
+		clients = append(clients, chatOIDCClient{
+			ID:           chatOIDCWebClientID(),
+			RedirectURI:  chatOIDCWebRedirectURI(),
+			RequirePKCE:  true,
+			IssueSession: true,
+		})
+	}
+	return clients
+}
+
+func chatOIDCFindClient(clientID string, redirectURI string) (chatOIDCClient, bool) {
+	for _, client := range chatOIDCClients() {
+		if client.ID == clientID && client.RedirectURI == redirectURI {
+			return client, true
+		}
+	}
+	return chatOIDCClient{}, false
+}
+
+func chatOIDCIsAllowedRedirectURI(redirectURI string) bool {
+	for _, client := range chatOIDCClients() {
+		if client.RedirectURI == redirectURI {
+			return true
+		}
+	}
+	return false
+}
+
 func chatOIDCLoginURL(c *gin.Context) string {
 	next := chatOIDCDefaultPostLoginURL + "?" + c.Request.URL.RawQuery
 	values := url.Values{}
 	values.Set("chat_oidc", "1")
 	values.Set("next", next)
-	return "https://api.open-codex.com/login?" + values.Encode()
+	values.Set("sso_reauth", "1")
+	loginPath := "/login"
+	if strings.EqualFold(c.Query("screen"), "register") {
+		loginPath = "/register"
+	}
+	return "https://api.open-codex.com" + loginPath + "?" + values.Encode()
 }
 
 func chatOIDCSessionUser(c *gin.Context) (*model.User, bool, error) {
@@ -375,7 +511,7 @@ func chatOIDCHasOpenIDScope(scope string) bool {
 }
 
 func chatOIDCAuthorizeError(c *gin.Context, status int, redirectURI string, state string, code string, description string) {
-	if redirectURI == chatOIDCRedirectURI() {
+	if chatOIDCIsAllowedRedirectURI(redirectURI) {
 		values := url.Values{}
 		values.Set("error", code)
 		values.Set("error_description", description)
@@ -388,7 +524,7 @@ func chatOIDCAuthorizeError(c *gin.Context, status int, redirectURI string, stat
 	c.JSON(status, gin.H{"error": code, "error_description": description})
 }
 
-func chatOIDCIDToken(user *model.User, nonce string) (string, error) {
+func chatOIDCIDToken(user *model.User, nonce string, clientID string) (string, error) {
 	key, err := chatOIDCPrivateKey()
 	if err != nil {
 		return "", err
@@ -404,7 +540,7 @@ func chatOIDCIDToken(user *model.User, nonce string) (string, error) {
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    chatOIDCIssuer,
 			Subject:   chatOIDCSubject(user.Id),
-			Audience:  jwt.ClaimStrings{chatOIDCClientID()},
+			Audience:  jwt.ClaimStrings{clientID},
 			ExpiresAt: jwt.NewNumericDate(now.Add(10 * time.Minute)),
 			IssuedAt:  jwt.NewNumericDate(now),
 		},
@@ -412,6 +548,25 @@ func chatOIDCIDToken(user *model.User, nonce string) (string, error) {
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = chatOIDCKeyID
 	return token.SignedString(key)
+}
+
+func chatOIDCVerifyPKCE(challenge string, method string, verifier string) bool {
+	if method != "S256" || !chatOIDCPKCEChallengePattern.MatchString(challenge) || !chatOIDCPKCEVerifierPattern.MatchString(verifier) {
+		return false
+	}
+	sum := sha256.Sum256([]byte(verifier))
+	computed := base64.RawURLEncoding.EncodeToString(sum[:])
+	return subtle.ConstantTimeCompare([]byte(computed), []byte(challenge)) == 1
+}
+
+func chatOIDCSaveLoginSession(c *gin.Context, user *model.User) error {
+	session := sessions.Default(c)
+	session.Set("id", user.Id)
+	session.Set("username", user.Username)
+	session.Set("role", user.Role)
+	session.Set("status", user.Status)
+	session.Set("group", user.Group)
+	return session.Save()
 }
 
 func chatOIDCUserClaims(user *model.User) gin.H {

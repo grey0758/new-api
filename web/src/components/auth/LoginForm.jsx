@@ -108,12 +108,20 @@ const LoginForm = () => {
   const githubTimeoutRef = useRef(null);
   const githubButtonText = t(githubButtonTextKeyByState[githubButtonState]);
   const [customOAuthLoading, setCustomOAuthLoading] = useState({});
-  const chatOIDCNext = searchParams.get('chat_oidc') === '1'
-    ? searchParams.get('next')
-    : '';
+  const chatOIDCNext =
+    searchParams.get('chat_oidc') === '1' ? searchParams.get('next') : '';
+  const isChatOIDCFlow = Boolean(
+    chatOIDCNext &&
+      chatOIDCNext.startsWith(
+        'https://api.open-codex.com/api/chat-oidc/authorize',
+      ),
+  );
+  const registerPath = isChatOIDCFlow
+    ? `/register?chat_oidc=1&next=${encodeURIComponent(chatOIDCNext)}`
+    : '/register';
 
   const navigateAfterLogin = () => {
-    if (chatOIDCNext && chatOIDCNext.startsWith('https://api.open-codex.com/api/chat-oidc/authorize')) {
+    if (isChatOIDCFlow) {
       window.location.href = chatOIDCNext;
       return;
     }
@@ -692,7 +700,7 @@ const LoginForm = () => {
                   <Text>
                     {t('没有账户？')}{' '}
                     <Link
-                      to='/register'
+                      to={registerPath}
                       className='text-blue-600 hover:text-blue-800 font-medium'
                     >
                       {t('注册')}
@@ -845,7 +853,7 @@ const LoginForm = () => {
                   <Text>
                     {t('没有账户？')}{' '}
                     <Link
-                      to='/register'
+                      to={registerPath}
                       className='text-blue-600 hover:text-blue-800 font-medium'
                     >
                       {t('注册')}

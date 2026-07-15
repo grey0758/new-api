@@ -34,6 +34,7 @@ func SetApiRouter(router *gin.Engine) {
 			chatOIDCRoute.GET("/authorize", controller.ChatOIDCAuthorize)
 			chatOIDCRoute.POST("/token", controller.ChatOIDCToken)
 			chatOIDCRoute.GET("/userinfo", controller.ChatOIDCUserInfo)
+			chatOIDCRoute.GET("/logout", controller.ChatOIDCLogout)
 			chatOIDCRoute.GET("/jwks", controller.ChatOIDCJWKS)
 		}
 		//apiRouter.GET("/midjourney", controller.GetMidjourney)

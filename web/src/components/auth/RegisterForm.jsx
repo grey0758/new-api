@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   API,
   getLogo,
@@ -69,6 +69,7 @@ import { SiDiscord } from 'react-icons/si';
 
 const RegisterForm = () => {
   let navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { t } = useTranslation();
   const githubButtonTextKeyByState = {
     idle: '使用 GitHub 继续',
@@ -115,6 +116,25 @@ const RegisterForm = () => {
 
   const logo = getLogo();
   const systemName = getSystemName();
+  const chatOIDCNext =
+    searchParams.get('chat_oidc') === '1' ? searchParams.get('next') : '';
+  const isChatOIDCFlow = Boolean(
+    chatOIDCNext &&
+      chatOIDCNext.startsWith(
+        'https://api.open-codex.com/api/chat-oidc/authorize',
+      ),
+  );
+  const loginPath = isChatOIDCFlow
+    ? `/login?chat_oidc=1&next=${encodeURIComponent(chatOIDCNext)}`
+    : '/login';
+
+  const finishAuthenticatedFlow = () => {
+    if (isChatOIDCFlow) {
+      window.location.href = chatOIDCNext;
+      return;
+    }
+    navigate('/');
+  };
 
   let affCode = new URLSearchParams(window.location.search).get('aff');
   if (affCode) {
@@ -200,7 +220,7 @@ const RegisterForm = () => {
         localStorage.setItem('user', JSON.stringify(data));
         setUserData(data);
         updateAPI();
-        navigate('/');
+        finishAuthenticatedFlow();
         showSuccess('登录成功！');
         setShowWeChatLoginModal(false);
       } else {
@@ -252,7 +272,7 @@ const RegisterForm = () => {
         });
         const { success, message } = res.data;
         if (success) {
-          navigate('/login');
+          navigate(loginPath);
           showSuccess('注册成功！');
         } else {
           showError(message);
@@ -397,7 +417,7 @@ const RegisterForm = () => {
         showSuccess('登录成功！');
         setUserData(data);
         updateAPI();
-        navigate('/');
+        finishAuthenticatedFlow();
       } else {
         showError(message);
       }
@@ -555,7 +575,7 @@ const RegisterForm = () => {
                 <Text>
                   {t('已有账户？')}{' '}
                   <Link
-                    to='/login'
+                    to={loginPath}
                     className='text-blue-600 hover:text-blue-800 font-medium'
                   >
                     {t('登录')}

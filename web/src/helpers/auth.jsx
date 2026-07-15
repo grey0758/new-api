@@ -34,14 +34,23 @@ export function authHeader() {
 
 export const AuthRedirect = ({ children }) => {
   const user = localStorage.getItem('user');
+  const params = new URLSearchParams(window.location.search);
+  const chatOIDCNext =
+    params.get('chat_oidc') === '1' ? params.get('next') : '';
+  const isChatOIDCNext = Boolean(
+    chatOIDCNext &&
+      chatOIDCNext.startsWith(
+        'https://api.open-codex.com/api/chat-oidc/authorize',
+      ),
+  );
+  const forceSSOReauth = params.get('sso_reauth') === '1';
 
   if (user) {
-    const params = new URLSearchParams(window.location.search);
-    const chatOIDCNext = params.get('chat_oidc') === '1' ? params.get('next') : '';
-    if (
-      chatOIDCNext &&
-      chatOIDCNext.startsWith('https://api.open-codex.com/api/chat-oidc/authorize')
-    ) {
+    if (isChatOIDCNext && forceSSOReauth) {
+      localStorage.removeItem('user');
+      return children;
+    }
+    if (isChatOIDCNext) {
       window.location.href = chatOIDCNext;
       return null;
     }

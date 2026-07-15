@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -45,6 +47,9 @@ func TestChatOIDCDiscovery(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	require.Equal(t, chatOIDCIssuer, body["issuer"])
 	require.Equal(t, chatOIDCIssuer+"/authorize", body["authorization_endpoint"])
+	require.Equal(t, chatOIDCIssuer+"/logout", body["end_session_endpoint"])
+	require.Contains(t, body["code_challenge_methods_supported"], "S256")
+	require.Contains(t, body["token_endpoint_auth_methods_supported"], "none")
 }
 
 func TestChatOIDCAuthorizeRequiresLogin(t *testing.T) {
@@ -59,7 +64,48 @@ func TestChatOIDCAuthorizeRequiresLogin(t *testing.T) {
 	location := rec.Header().Get("Location")
 	require.Contains(t, location, "https://api.open-codex.com/login?")
 	require.Contains(t, location, "chat_oidc=1")
+	require.Contains(t, location, "sso_reauth=1")
 	require.Contains(t, location, url.QueryEscape(chatOIDCIssuer+"/authorize"))
+}
+
+func TestChatOIDCWebAuthorizeRequiresPKCE(t *testing.T) {
+	setupChatOIDCTestEnv(t)
+	router := newChatOIDCTestRouter(t)
+	query := url.Values{}
+	query.Set("response_type", "code")
+	query.Set("client_id", chatOIDCWebDefaultClientID)
+	query.Set("redirect_uri", chatOIDCWebDefaultRedirect)
+	query.Set("scope", "openid profile email")
+	query.Set("state", "web-state")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/chat-oidc/authorize?"+query.Encode(), nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusFound, rec.Code)
+	redirect, err := url.Parse(rec.Header().Get("Location"))
+	require.NoError(t, err)
+	require.Equal(t, chatOIDCWebDefaultRedirect, redirect.Scheme+"://"+redirect.Host+redirect.Path)
+	require.Equal(t, "invalid_request", redirect.Query().Get("error"))
+	require.Equal(t, "web-state", redirect.Query().Get("state"))
+}
+
+func TestChatOIDCWebRegistrationEntry(t *testing.T) {
+	setupChatOIDCTestEnv(t)
+	router := newChatOIDCTestRouter(t)
+	verifier := strings.Repeat("a", 64)
+	query := validWebAuthorizeQuery(verifier)
+	query.Set("screen", "register")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/chat-oidc/authorize?"+query.Encode(), nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusFound, rec.Code)
+	location := rec.Header().Get("Location")
+	require.Contains(t, location, "https://api.open-codex.com/register?")
+	require.Contains(t, location, "chat_oidc=1")
+	require.Contains(t, location, "sso_reauth=1")
 }
 
 func TestChatOIDCFullCodeFlow(t *testing.T) {
@@ -120,6 +166,65 @@ func TestChatOIDCFullCodeFlow(t *testing.T) {
 	require.Equal(t, "plus", userInfo["group"])
 }
 
+func TestChatOIDCWebPKCEFlowIssuesNewAPISession(t *testing.T) {
+	setupChatOIDCTestEnv(t)
+	setupChatOIDCTestDB(t)
+	router := newChatOIDCTestRouter(t)
+	verifier := strings.Repeat("b", 64)
+
+	cookieHeader := chatOIDCTestSessionCookie(t, router, 42)
+	authRec := httptest.NewRecorder()
+	authReq := httptest.NewRequest(http.MethodGet, "/api/chat-oidc/authorize?"+validWebAuthorizeQuery(verifier).Encode(), nil)
+	authReq.Header.Set("Cookie", cookieHeader)
+	router.ServeHTTP(authRec, authReq)
+
+	require.Equal(t, http.StatusFound, authRec.Code)
+	redirect, err := url.Parse(authRec.Header().Get("Location"))
+	require.NoError(t, err)
+	require.Equal(t, chatOIDCWebDefaultRedirect, redirect.Scheme+"://"+redirect.Host+redirect.Path)
+	code := redirect.Query().Get("code")
+	require.NotEmpty(t, code)
+
+	wrongVerifierRec := exchangeWebOIDCCode(router, code, strings.Repeat("c", 64))
+	require.Equal(t, http.StatusBadRequest, wrongVerifierRec.Code)
+
+	tokenRec := exchangeWebOIDCCode(router, code, verifier)
+	require.Equal(t, http.StatusOK, tokenRec.Code)
+	var tokenBody map[string]any
+	require.NoError(t, json.Unmarshal(tokenRec.Body.Bytes(), &tokenBody))
+	require.NotEmpty(t, tokenBody["access_token"])
+
+	cookies := tokenRec.Result().Cookies()
+	require.NotEmpty(t, cookies)
+	sessionRec := httptest.NewRecorder()
+	sessionReq := httptest.NewRequest(http.MethodGet, "/test-session", nil)
+	sessionReq.AddCookie(cookies[0])
+	router.ServeHTTP(sessionRec, sessionReq)
+	require.Equal(t, http.StatusOK, sessionRec.Code)
+	var sessionBody map[string]any
+	require.NoError(t, json.Unmarshal(sessionRec.Body.Bytes(), &sessionBody))
+	require.Equal(t, float64(42), sessionBody["id"])
+}
+
+func TestChatOIDCLogoutClearsSession(t *testing.T) {
+	setupChatOIDCTestEnv(t)
+	router := newChatOIDCTestRouter(t)
+	cookieHeader := chatOIDCTestSessionCookie(t, router, 42)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/chat-oidc/logout?post_logout_redirect_uri="+url.QueryEscape(chatOIDCWebDefaultLogoutURL),
+		nil,
+	)
+	req.Header.Set("Cookie", cookieHeader)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusFound, rec.Code)
+	require.Equal(t, chatOIDCWebDefaultLogoutURL, rec.Header().Get("Location"))
+	require.NotEmpty(t, rec.Result().Cookies())
+}
+
 func TestChatOIDCAuthorizeRejectsWrongClient(t *testing.T) {
 	setupChatOIDCTestEnv(t)
 	router := newChatOIDCTestRouter(t)
@@ -147,7 +252,7 @@ func setupChatOIDCTestEnv(t *testing.T) {
 
 func setupChatOIDCTestDB(t *testing.T) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file:chat_oidc_test?mode=memory&cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:"+url.QueryEscape(t.Name())+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 	model.DB = db
 	require.NoError(t, db.AutoMigrate(&model.User{}))
@@ -174,7 +279,11 @@ func newChatOIDCTestRouter(t *testing.T) *gin.Engine {
 	group.GET("/authorize", ChatOIDCAuthorize)
 	group.POST("/token", ChatOIDCToken)
 	group.GET("/userinfo", ChatOIDCUserInfo)
+	group.GET("/logout", ChatOIDCLogout)
 	group.GET("/jwks", ChatOIDCJWKS)
+	router.GET("/test-session", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"id": sessions.Default(c).Get("id")})
+	})
 	return router
 }
 
@@ -203,6 +312,38 @@ func validAuthorizeQuery() string {
 	query.Set("state", "state-1")
 	query.Set("nonce", "nonce-1")
 	return query.Encode()
+}
+
+func validWebAuthorizeQuery(verifier string) url.Values {
+	query := url.Values{}
+	query.Set("response_type", "code")
+	query.Set("client_id", chatOIDCWebDefaultClientID)
+	query.Set("redirect_uri", chatOIDCWebDefaultRedirect)
+	query.Set("scope", "openid profile email")
+	query.Set("state", "web-state")
+	query.Set("nonce", "web-nonce")
+	query.Set("code_challenge", chatOIDCTestPKCEChallenge(verifier))
+	query.Set("code_challenge_method", "S256")
+	return query
+}
+
+func exchangeWebOIDCCode(router *gin.Engine, code string, verifier string) *httptest.ResponseRecorder {
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("client_id", chatOIDCWebDefaultClientID)
+	form.Set("code", code)
+	form.Set("redirect_uri", chatOIDCWebDefaultRedirect)
+	form.Set("code_verifier", verifier)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/chat-oidc/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(rec, req)
+	return rec
+}
+
+func chatOIDCTestPKCEChallenge(verifier string) string {
+	sum := sha256.Sum256([]byte(verifier))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 func TestMain(m *testing.M) {
