@@ -52,6 +52,8 @@ const SubscriptionPurchaseModal = ({
   enableOnlineTopUp = false,
   enableStripeTopUp = false,
   enableCreemTopUp = false,
+  topUpLink = '',
+  openTopUpLink,
   purchaseLimitInfo = null,
   onPayStripe,
   onPayCreem,
@@ -241,6 +243,25 @@ const SubscriptionPurchaseModal = ({
                   </Button>
                 </div>
               )}
+            </div>
+          ) : topUpLink ? (
+            <div className='space-y-3'>
+              <Banner
+                type='info'
+                description={t(
+                  '请前往购买页面购买订阅套餐，购买后返回本页输入卡密或兑换码。',
+                )}
+                className='!rounded-xl'
+                closeIcon={null}
+              />
+              <Button
+                theme='solid'
+                type='primary'
+                block
+                onClick={openTopUpLink}
+              >
+                {t('前往购买页面')}
+              </Button>
             </div>
           ) : (
             <Banner
