@@ -36,9 +36,13 @@ func StartSubscriptionQuotaResetTask() {
 			ticker := time.NewTicker(subscriptionResetTickInterval)
 			defer ticker.Stop()
 
-			runSubscriptionQuotaResetOnce()
-			for range ticker.C {
+			if model.IsBackgroundTaskLeader() {
 				runSubscriptionQuotaResetOnce()
+			}
+			for range ticker.C {
+				if model.IsBackgroundTaskLeader() {
+					runSubscriptionQuotaResetOnce()
+				}
 			}
 		})
 	})

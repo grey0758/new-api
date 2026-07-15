@@ -25,6 +25,9 @@ func UpdateMidjourneyTaskBulk() {
 	ctx := context.TODO()
 	for {
 		time.Sleep(time.Duration(15) * time.Second)
+		if !model.IsBackgroundTaskLeader() {
+			continue
+		}
 
 		tasks := model.GetAllUnFinishTasks()
 		if len(tasks) == 0 {

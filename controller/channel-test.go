@@ -892,6 +892,9 @@ func AutomaticallyTestChannels() {
 			for {
 				frequency := operation_setting.GetMonitorSetting().AutoTestChannelMinutes
 				time.Sleep(time.Duration(int(math.Round(frequency))) * time.Minute)
+				if !model.IsBackgroundTaskLeader() {
+					continue
+				}
 				common.SysLog(fmt.Sprintf("automatically test channels with interval %f minutes", frequency))
 				common.SysLog("automatically testing all channels")
 				_ = testAllChannels(false)

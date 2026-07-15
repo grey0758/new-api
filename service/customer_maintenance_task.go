@@ -11,6 +11,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/bytedance/gopkg/util/gopool"
 )
 
@@ -62,9 +63,13 @@ func StartCustomerMaintenanceNotificationTask() {
 			ticker := time.NewTicker(customerMaintenanceNotificationInterval)
 			defer ticker.Stop()
 
-			runCustomerMaintenanceNotificationOnce()
-			for range ticker.C {
+			if model.IsBackgroundTaskLeader() {
 				runCustomerMaintenanceNotificationOnce()
+			}
+			for range ticker.C {
+				if model.IsBackgroundTaskLeader() {
+					runCustomerMaintenanceNotificationOnce()
+				}
 			}
 		})
 	})

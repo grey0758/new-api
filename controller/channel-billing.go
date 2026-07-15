@@ -498,6 +498,9 @@ func UpdateAllChannelsBalance(c *gin.Context) {
 func AutomaticallyUpdateChannels(frequency int) {
 	for {
 		time.Sleep(time.Duration(frequency) * time.Minute)
+		if !model.IsBackgroundTaskLeader() {
+			continue
+		}
 		common.SysLog("updating all channels")
 		_ = updateAllChannelsBalance()
 		common.SysLog("channels update done")

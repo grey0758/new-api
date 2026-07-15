@@ -91,6 +91,9 @@ func sweepTimedOutTasks(ctx context.Context) {
 func TaskPollingLoop() {
 	for {
 		time.Sleep(time.Duration(15) * time.Second)
+		if !model.IsBackgroundTaskLeader() {
+			continue
+		}
 		common.SysLog("任务进度轮询开始")
 		ctx := context.TODO()
 		sweepTimedOutTasks(ctx)

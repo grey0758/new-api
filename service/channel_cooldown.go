@@ -543,7 +543,9 @@ func StartChannelCooldownProbeTask() {
 		defer ticker.Stop()
 		common.SysLog("channel cooldown active probe task started")
 		for range ticker.C {
-			runDueChannelCooldownProbes()
+			if model.IsBackgroundTaskLeader() {
+				runDueChannelCooldownProbes()
+			}
 		}
 	}()
 }

@@ -283,8 +283,12 @@ func migrateDB() error {
 		&UserOAuthBinding{},
 		&CustomerContact{},
 		&CustomerNotification{},
+		&BackgroundTaskLease{},
 	)
 	if err != nil {
+		return err
+	}
+	if err := ensureBackgroundTaskLeaseRow(DB); err != nil {
 		return err
 	}
 	if common.UsingSQLite {
@@ -334,6 +338,7 @@ func migrateDBFast() error {
 		{&UserOAuthBinding{}, "UserOAuthBinding"},
 		{&CustomerContact{}, "CustomerContact"},
 		{&CustomerNotification{}, "CustomerNotification"},
+		{&BackgroundTaskLease{}, "BackgroundTaskLease"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))
@@ -357,6 +362,9 @@ func migrateDBFast() error {
 		if err != nil {
 			return err
 		}
+	}
+	if err := ensureBackgroundTaskLeaseRow(DB); err != nil {
+		return err
 	}
 	if common.UsingSQLite {
 		if err := ensureSubscriptionPlanTableSQLite(); err != nil {

@@ -63,6 +63,8 @@ func main() {
 			common.FatalLog("failed to close database: " + err.Error())
 		}
 	}()
+	model.StartBackgroundTaskLeader()
+	defer model.StopBackgroundTaskLeader()
 
 	if common.RedisEnabled {
 		// for compatibility with old versions
