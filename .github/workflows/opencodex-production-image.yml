@@ -52,6 +52,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Prepare embedded frontend placeholder
+        if: matrix.suite == 'go'
+        run: |
+          mkdir -p web/dist
+          touch web/dist/index.html
+
       - name: Run complete Go test suite
         if: matrix.suite == 'go'
         run: go test ./...
