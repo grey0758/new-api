@@ -20,6 +20,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Button,
+  DatePicker,
   Empty,
   Modal,
   Select,
@@ -37,6 +38,10 @@ import { API, showError, showSuccess } from '../../../../helpers';
 import { convertUSDToCurrency } from '../../../../helpers/render';
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
 import CardTable from '../../../common/ui/CardTable';
+import {
+  addCalendarMonthToUnix,
+  getBrowserTimezone,
+} from '../subscriptionTime';
 
 const { Text } = Typography;
 
@@ -81,6 +86,9 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
 
   const [plans, setPlans] = useState([]);
   const [selectedPlanId, setSelectedPlanId] = useState(null);
+  const [updatingSubscriptionId, setUpdatingSubscriptionId] = useState(null);
+  const [editingSubscription, setEditingSubscription] = useState(null);
+  const [manualEndTime, setManualEndTime] = useState(null);
 
   const [subs, setSubs] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
@@ -150,7 +158,11 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
   };
 
   useEffect(() => {
-    if (!visible) return;
+    if (!visible) {
+      setEditingSubscription(null);
+      setManualEndTime(null);
+      return;
+    }
     setSelectedPlanId(null);
     setCurrentPage(1);
     loadPlans();
@@ -191,6 +203,103 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
       showError(t('请求失败'));
     } finally {
       setCreating(false);
+    }
+  };
+
+  const updateSubscriptionEndTime = async (sub, payload) => {
+    if (!user?.id || !sub?.id || !sub?.end_time) {
+      showError(t('订阅信息缺失'));
+      return false;
+    }
+
+    setUpdatingSubscriptionId(sub.id);
+    try {
+      const res = await API.patch(
+        `/api/subscription/admin/users/${user.id}/subscriptions/${sub.id}/end_time`,
+        {
+          expected_end_time: sub.end_time,
+          ...payload,
+        },
+      );
+      if (res.data?.success) {
+        const message = res.data?.data?.message;
+        showSuccess(message || t('到期时间已更新'));
+        await loadUserSubscriptions();
+        onSuccess?.();
+        return true;
+      }
+      showError(res.data?.message || t('操作失败'));
+      return false;
+    } catch (e) {
+      showError(e?.response?.data?.message || t('请求失败'));
+      return false;
+    } finally {
+      setUpdatingSubscriptionId(null);
+    }
+  };
+
+  const renewSubscriptionOneMonth = (sub) => {
+    const nextEndTime = addCalendarMonthToUnix(sub?.end_time);
+    if (!nextEndTime) {
+      showError(t('订阅到期时间无效'));
+      return;
+    }
+    if (nextEndTime <= Date.now() / 1000) {
+      showError(t('续费后的到期时间仍早于当前时间，请手动设置'));
+      return;
+    }
+
+    Modal.confirm({
+      title: t('确认续费一个月'),
+      centered: true,
+      content: (
+        <div className='flex flex-col gap-2'>
+          <Text>
+            {t('当前到期时间')}: {formatTs(sub?.end_time)}
+          </Text>
+          <Text strong>
+            {t('新的到期时间')}: {formatTs(nextEndTime)}
+          </Text>
+          <Text type='tertiary'>
+            {t('按自然月续费，保持对应日期；月底会自动取下月最后一天。')}
+          </Text>
+        </div>
+      ),
+      onOk: () =>
+        updateSubscriptionEndTime(sub, {
+          action: 'renew_month',
+          timezone: getBrowserTimezone(),
+        }),
+    });
+  };
+
+  const openManualEndTimeModal = (sub) => {
+    setEditingSubscription(sub);
+    setManualEndTime(
+      sub?.end_time ? new Date(sub.end_time * 1000) : new Date(),
+    );
+  };
+
+  const saveManualEndTime = async () => {
+    if (!editingSubscription) return;
+    const targetMilliseconds = new Date(manualEndTime).getTime();
+    if (!Number.isFinite(targetMilliseconds)) {
+      showError(t('请选择有效的到期时间'));
+      return;
+    }
+    const targetEndTime = Math.floor(targetMilliseconds / 1000);
+    if (targetEndTime <= Date.now() / 1000) {
+      showError(t('新的到期时间必须晚于当前时间'));
+      return;
+    }
+
+    const success = await updateSubscriptionEndTime(editingSubscription, {
+      action: 'set',
+      end_time: targetEndTime,
+    });
+    if (success) {
+      setEditingSubscription(null);
+      setManualEndTime(null);
     }
   };
 
@@ -314,22 +423,41 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
       {
         title: '',
         key: 'operate',
-        width: 140,
+        width: 340,
         fixed: 'right',
         render: (_, record) => {
           const sub = record?.subscription;
           const now = Date.now() / 1000;
+          const isUpdating = updatingSubscriptionId !== null;
           const isExpired =
             (sub?.end_time || 0) > 0 && (sub?.end_time || 0) < now;
           const isActive = sub?.status === 'active' && !isExpired;
           const isCancelled = sub?.status === 'cancelled';
           return (
-            <Space>
+            <div className='flex flex-wrap gap-2'>
+              <Button
+                size='small'
+                type='primary'
+                theme='light'
+                disabled={isCancelled || isUpdating}
+                loading={updatingSubscriptionId === sub?.id}
+                onClick={() => renewSubscriptionOneMonth(sub)}
+              >
+                {t('续费一个月')}
+              </Button>
+              <Button
+                size='small'
+                theme='light'
+                disabled={isCancelled || isUpdating}
+                onClick={() => openManualEndTimeModal(sub)}
+              >
+                {t('设置到期时间')}
+              </Button>
               <Button
                 size='small'
                 type='warning'
                 theme='light'
-                disabled={!isActive || isCancelled}
+                disabled={!isActive || isCancelled || isUpdating}
                 onClick={() => invalidateSubscription(sub?.id)}
               >
                 {t('作废')}
@@ -338,16 +466,17 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
                 size='small'
                 type='danger'
                 theme='light'
+                disabled={isUpdating}
                 onClick={() => deleteSubscription(sub?.id)}
               >
                 {t('删除')}
               </Button>
-            </Space>
+            </div>
           );
         },
       },
     ];
-  }, [t, planTitleMap]);
+  }, [t, planTitleMap, updatingSubscriptionId, user?.id]);
 
   return (
     <SideSheet
@@ -426,6 +555,36 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
           size='middle'
         />
       </div>
+
+      <Modal
+        title={t('设置到期时间')}
+        visible={Boolean(editingSubscription)}
+        centered
+        okText={t('保存')}
+        cancelText={t('取消')}
+        confirmLoading={updatingSubscriptionId === editingSubscription?.id}
+        onOk={saveManualEndTime}
+        onCancel={() => {
+          setEditingSubscription(null);
+          setManualEndTime(null);
+        }}
+      >
+        <div className='flex flex-col gap-3'>
+          <Text>
+            {t('当前到期时间')}: {formatTs(editingSubscription?.end_time)}
+          </Text>
+          <DatePicker
+            type='dateTime'
+            value={manualEndTime}
+            onChange={setManualEndTime}
+            placeholder={t('请选择到期时间')}
+            showClear={false}
+            inputReadOnly={isMobile}
+            style={{ width: '100%' }}
+          />
+          <Text type='tertiary'>{t('新的到期时间必须晚于当前时间。')}</Text>
+        </div>
+      </Modal>
     </SideSheet>
   );
 };

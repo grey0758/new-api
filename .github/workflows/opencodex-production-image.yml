@@ -77,6 +77,13 @@ jobs:
         working-directory: web
         run: bun run test:registration-challenge
 
+      - name: Run subscription-time tests
+        if: matrix.suite == 'web'
+        working-directory: web
+        env:
+          TZ: Asia/Shanghai
+        run: bun run test:subscription-time
+
       - name: Build frontend
         if: matrix.suite == 'web'
         working-directory: web

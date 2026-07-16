@@ -348,6 +348,54 @@ func AdminCreateUserSubscription(c *gin.Context) {
 	common.ApiSuccess(c, nil)
 }
 
+type AdminUpdateUserSubscriptionEndTimeRequest struct {
+	Action          string `json:"action"`
+	ExpectedEndTime int64  `json:"expected_end_time"`
+	EndTime         int64  `json:"end_time"`
+	Timezone        string `json:"timezone"`
+}
+
+// AdminUpdateUserSubscriptionEndTime renews one calendar month or sets a
+// manually selected future expiry for one explicitly selected user subscription.
+func AdminUpdateUserSubscriptionEndTime(c *gin.Context) {
+	userId, _ := strconv.Atoi(c.Param("id"))
+	subscriptionId, _ := strconv.Atoi(c.Param("subscription_id"))
+	if userId <= 0 || subscriptionId <= 0 {
+		common.ApiErrorMsg(c, "无效的用户或订阅ID")
+		return
+	}
+
+	var req AdminUpdateUserSubscriptionEndTimeRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.ExpectedEndTime <= 0 {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	if req.Action == model.AdminUserSubscriptionEndTimeActionSet && req.EndTime <= 0 {
+		common.ApiErrorMsg(c, "请选择有效的到期时间")
+		return
+	}
+
+	subscription, message, err := model.AdminUpdateUserSubscriptionEndTime(
+		model.AdminUpdateUserSubscriptionEndTimeParams{
+			UserSubscriptionId: subscriptionId,
+			UserId:             userId,
+			ExpectedEndTime:    req.ExpectedEndTime,
+			EndTime:            req.EndTime,
+			Action:             req.Action,
+			Timezone:           req.Timezone,
+		},
+	)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	common.ApiSuccess(c, gin.H{
+		"subscription": subscription,
+		"message":      message,
+	})
+}
+
 // AdminInvalidateUserSubscription cancels a user subscription immediately.
 func AdminInvalidateUserSubscription(c *gin.Context) {
 	subId, _ := strconv.Atoi(c.Param("id"))

@@ -46,6 +46,7 @@
     "build": "vite build",
     "test:install-command": "node scripts/check-install-command-builder.mjs",
     "test:registration-challenge": "node scripts/check-registration-challenge.mjs",
+    "test:subscription-time": "node scripts/check-subscription-time.mjs",
     "lint": "prettier . --check",
     "lint:fix": "prettier . --write",
     "eslint": "bunx eslint \"**/*.{js,jsx}\" --cache",

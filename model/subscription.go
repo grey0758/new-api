@@ -291,6 +291,78 @@ type SubscriptionSummary struct {
 	Subscription *UserSubscription `json:"subscription"`
 }
 
+const (
+	AdminUserSubscriptionEndTimeActionRenewMonth = "renew_month"
+	AdminUserSubscriptionEndTimeActionSet        = "set"
+)
+
+var (
+	ErrUserSubscriptionEndTimeChanged = errors.New("订阅到期时间已变化，请刷新后重试")
+	ErrUserSubscriptionCancelled      = errors.New("已作废的订阅不能修改到期时间")
+)
+
+type AdminUpdateUserSubscriptionEndTimeParams struct {
+	UserSubscriptionId int
+	UserId             int
+	ExpectedEndTime    int64
+	EndTime            int64
+	Action             string
+	Timezone           string
+}
+
+func addCalendarMonthsClamped(timestamp int64, months int, timezone string) (int64, error) {
+	if timestamp <= 0 {
+		return 0, errors.New("invalid timestamp")
+	}
+	if months <= 0 {
+		return 0, errors.New("months must be > 0")
+	}
+	timezone = strings.TrimSpace(timezone)
+	if timezone == "" || len(timezone) > 64 {
+		return 0, errors.New("invalid timezone")
+	}
+	location, err := time.LoadLocation(timezone)
+	if err != nil {
+		return 0, errors.New("invalid timezone")
+	}
+	base := time.Unix(timestamp, 0).In(location)
+	targetMonth := time.Date(
+		base.Year(),
+		base.Month()+time.Month(months),
+		1,
+		base.Hour(),
+		base.Minute(),
+		base.Second(),
+		base.Nanosecond(),
+		location,
+	)
+	lastDay := time.Date(
+		targetMonth.Year(),
+		targetMonth.Month()+1,
+		0,
+		base.Hour(),
+		base.Minute(),
+		base.Second(),
+		base.Nanosecond(),
+		location,
+	).Day()
+	targetDay := base.Day()
+	if targetDay > lastDay {
+		targetDay = lastDay
+	}
+
+	return time.Date(
+		targetMonth.Year(),
+		targetMonth.Month(),
+		targetDay,
+		base.Hour(),
+		base.Minute(),
+		base.Second(),
+		base.Nanosecond(),
+		location,
+	).Unix(), nil
+}
+
 func calcPlanEndTime(start time.Time, plan *SubscriptionPlan) (int64, error) {
 	if plan == nil {
 		return 0, errors.New("plan is nil")
@@ -739,6 +811,107 @@ func buildSubscriptionSummaries(subs []UserSubscription) []SubscriptionSummary {
 		})
 	}
 	return result
+}
+
+// AdminUpdateUserSubscriptionEndTime updates only the expiry of one explicitly selected
+// user subscription. The expected end time provides optimistic concurrency protection.
+func AdminUpdateUserSubscriptionEndTime(params AdminUpdateUserSubscriptionEndTimeParams) (*UserSubscription, string, error) {
+	if params.UserSubscriptionId <= 0 || params.UserId <= 0 || params.ExpectedEndTime <= 0 {
+		return nil, "", errors.New("invalid subscription update params")
+	}
+	action := strings.TrimSpace(params.Action)
+	if action != AdminUserSubscriptionEndTimeActionRenewMonth && action != AdminUserSubscriptionEndTimeActionSet {
+		return nil, "", errors.New("invalid subscription end time action")
+	}
+
+	now := GetDBTimestamp()
+	cacheGroup := ""
+	message := ""
+	var updatedSubscription *UserSubscription
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var sub UserSubscription
+		if err := tx.Set("gorm:query_option", "FOR UPDATE").
+			Where("id = ? AND user_id = ?", params.UserSubscriptionId, params.UserId).
+			First(&sub).Error; err != nil {
+			return err
+		}
+		if sub.Status == "cancelled" {
+			return ErrUserSubscriptionCancelled
+		}
+		if sub.EndTime != params.ExpectedEndTime {
+			return ErrUserSubscriptionEndTimeChanged
+		}
+
+		newEndTime := params.EndTime
+		if action == AdminUserSubscriptionEndTimeActionRenewMonth {
+			var err error
+			newEndTime, err = addCalendarMonthsClamped(sub.EndTime, 1, params.Timezone)
+			if err != nil {
+				return err
+			}
+		}
+		if newEndTime <= now {
+			return errors.New("新的到期时间必须晚于当前时间")
+		}
+		if newEndTime <= sub.StartTime {
+			return errors.New("新的到期时间必须晚于订阅开始时间")
+		}
+
+		wasActive := sub.Status == "active" && sub.EndTime > now
+		updates := map[string]interface{}{
+			"end_time":   newEndTime,
+			"status":     "active",
+			"updated_at": now,
+		}
+
+		if !wasActive {
+			upgradeGroup := strings.TrimSpace(sub.UpgradeGroup)
+			if upgradeGroup != "" {
+				currentGroup, err := getUserGroupByIdTx(tx, sub.UserId)
+				if err != nil {
+					return err
+				}
+				if currentGroup != upgradeGroup {
+					if strings.TrimSpace(sub.PrevUserGroup) == "" {
+						sub.PrevUserGroup = currentGroup
+						updates["prev_user_group"] = currentGroup
+					}
+					if err := tx.Model(&User{}).Where("id = ?", sub.UserId).
+						Update("group", upgradeGroup).Error; err != nil {
+						return err
+					}
+					cacheGroup = upgradeGroup
+					message = fmt.Sprintf("用户分组将升级到 %s", upgradeGroup)
+				}
+			}
+		}
+
+		if newEndTime != sub.EndTime || sub.Status != "active" {
+			result := tx.Model(&UserSubscription{}).
+				Where("id = ? AND user_id = ? AND end_time = ?", sub.Id, sub.UserId, sub.EndTime).
+				Updates(updates)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return ErrUserSubscriptionEndTimeChanged
+			}
+		}
+
+		sub.EndTime = newEndTime
+		sub.Status = "active"
+		sub.UpdatedAt = now
+		updatedSubscription = &sub
+		return nil
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	if cacheGroup != "" {
+		_ = UpdateUserGroupCache(params.UserId, cacheGroup)
+	}
+	return updatedSubscription, message, nil
 }
 
 // AdminInvalidateUserSubscription marks a user subscription as cancelled and ends it immediately.
