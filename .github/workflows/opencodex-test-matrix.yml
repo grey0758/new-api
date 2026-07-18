@@ -1,0 +1,125 @@
+name: OpenCodex test matrix
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test ${{ matrix.suite }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - go
+          - web
+          - docker
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Go
+        if: matrix.suite == 'go'
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Prepare embedded frontend placeholder
+        if: matrix.suite == 'go'
+        run: |
+          mkdir -p web/dist
+          touch web/dist/index.html
+
+      - name: Run complete Go test suite
+        if: matrix.suite == 'go'
+        run: go test ./...
+
+      - name: Run Go vulnerability gate
+        if: matrix.suite == 'go'
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+
+      - name: Set up Bun
+        if: matrix.suite == 'web'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.10
+
+      - name: Install locked frontend dependencies
+        if: matrix.suite == 'web'
+        working-directory: web
+        run: bun install --frozen-lockfile
+
+      - name: Run install-command tests
+        if: matrix.suite == 'web'
+        working-directory: web
+        run: bun run test:install-command
+
+      - name: Run registration-challenge tests
+        if: matrix.suite == 'web'
+        working-directory: web
+        run: bun run test:registration-challenge
+
+      - name: Run subscription-time tests
+        if: matrix.suite == 'web'
+        working-directory: web
+        env:
+          TZ: Asia/Shanghai
+        run: bun run test:subscription-time
+
+      - name: Build frontend
+        if: matrix.suite == 'web'
+        working-directory: web
+        env:
+          DISABLE_ESLINT_PLUGIN: "true"
+          VITE_REACT_APP_VERSION: ci-${{ github.sha }}
+        run: bun run build
+
+      - name: Resolve Docker preflight version
+        if: matrix.suite == 'docker'
+        shell: bash
+        run: printf 'ci-%s\n' "${GITHUB_SHA::12}" > VERSION
+
+      - name: Set up Docker Buildx
+        if: matrix.suite == 'docker'
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build production Dockerfile preflight
+        if: matrix.suite == 'docker'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: new-api:ci-${{ github.sha }}
+          cache-from: type=gha,scope=opencodex-production-amd64
+          cache-to: type=gha,mode=max,scope=opencodex-production-amd64
+          provenance: false
+          sbom: false
+
+      - name: Scan source and configuration
+        if: matrix.suite == 'docker'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: 1
+
+      - name: Scan preflight image
+        if: matrix.suite == 'docker'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: new-api:ci-${{ github.sha }}
+          scanners: vuln
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: 1
