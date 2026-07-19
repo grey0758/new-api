@@ -6,7 +6,9 @@ on:
       - "opencodex-prod-*"
 
 concurrency:
-  group: opencodex-production-image-${{ github.ref }}
+  # Production publication is globally serialized across every release tag.
+  # A per-ref key would allow two different tags to push/sign concurrently.
+  group: opencodex-production-release
   cancel-in-progress: false
 
 permissions:
@@ -24,6 +26,7 @@ jobs:
   build:
     name: Build, publish, and sign linux/amd64
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     needs: test
     outputs:
       image: ${{ steps.release.outputs.image }}
@@ -138,7 +141,40 @@ jobs:
           cosign sign --yes "$IMAGE@$INDEX_DIGEST"
           cosign sign --yes "$IMAGE@$PLATFORM_DIGEST"
 
-      - name: Verify published signatures
+      - name: Extract and validate BuildKit provenance and SBOM predicates
+        shell: bash
+        env:
+          IMAGE: ${{ steps.release.outputs.image }}
+          INDEX_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          docker buildx imagetools inspect "$IMAGE@$INDEX_DIGEST" \
+            --format '{{json .Provenance.SLSA}}' > provenance.slsa-v1.json
+          docker buildx imagetools inspect "$IMAGE@$INDEX_DIGEST" \
+            --format '{{json .SBOM.SPDX}}' > sbom.spdx.json
+
+          jq -e '
+            .buildDefinition.buildType
+            and .runDetails.builder.id
+            and ((.buildDefinition.resolvedDependencies // []) | length > 0)
+          ' provenance.slsa-v1.json >/dev/null
+          jq -e '
+            .spdxVersion == "SPDX-2.3"
+            and ((.packages // []) | length > 0)
+            and ((.relationships // []) | length > 0)
+          ' sbom.spdx.json >/dev/null
+
+      - name: Sign provenance and SBOM attestations for the deployed digest
+        shell: bash
+        env:
+          IMAGE: ${{ steps.release.outputs.image }}
+          PLATFORM_DIGEST: ${{ steps.platform.outputs.digest }}
+        run: |
+          cosign attest --yes --type slsaprovenance1 \
+            --predicate provenance.slsa-v1.json "$IMAGE@$PLATFORM_DIGEST"
+          cosign attest --yes --type spdxjson \
+            --predicate sbom.spdx.json "$IMAGE@$PLATFORM_DIGEST"
+
+      - name: Verify published signatures and attestations
         shell: bash
         env:
           IMAGE: ${{ steps.release.outputs.image }}
@@ -152,6 +188,16 @@ jobs:
               --certificate-oidc-issuer https://token.actions.githubusercontent.com \
               "$IMAGE@$digest" >/dev/null
           done
+          cosign verify-attestation \
+            --type slsaprovenance1 \
+            --certificate-identity "$identity" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "$IMAGE@$PLATFORM_DIGEST" >/dev/null
+          cosign verify-attestation \
+            --type spdxjson \
+            --certificate-identity "$identity" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "$IMAGE@$PLATFORM_DIGEST" >/dev/null
 
       - name: Publish release summary
         shell: bash
@@ -171,5 +217,5 @@ jobs:
             echo "- Immutable OCI index: \`$IMAGE@$INDEX_DIGEST\`"
             echo "- Immutable linux/amd64 image: \`$IMAGE@$PLATFORM_DIGEST\`"
             echo "- Platform: \`linux/amd64\`"
-            echo "- Supply chain: Trivy passed; both digests signed and verified"
+            echo "- Supply chain: Trivy passed; both digests signed; SLSA provenance and SPDX SBOM attestations signed and verified for the deployed digest"
           } >> "$GITHUB_STEP_SUMMARY"

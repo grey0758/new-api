@@ -3,17 +3,18 @@ name: PR Check
 permissions:
   contents: read
   issues: read
-  pull-requests: read
+  pull-requests: write
 
 on:
   pull_request_target:
-    types: [opened, reopened]
+    # Metadata-only workflow: no contributor-controlled checkout or scripts.
+    types: [opened, reopened, synchronize]
 
 jobs:
   pr-quality:
     runs-on: ubuntu-latest
     steps:
-      - uses: peakoss/anti-slop@v0.2.1
+      - uses: peakoss/anti-slop@85daca1880e9e1af197fc06ea03349daf08f4202 # v0.2.1
         with:
           max-failures: 4
           require-description: true
