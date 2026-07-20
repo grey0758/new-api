@@ -675,6 +675,8 @@ type TaskSubmitReq struct {
 	Image          string                 `json:"image,omitempty"`
 	Images         []string               `json:"images,omitempty"`
 	Size           string                 `json:"size,omitempty"`
+	Resolution     string                 `json:"resolution,omitempty"`
+	AspectRatio    string                 `json:"aspect_ratio,omitempty"`
 	Duration       int                    `json:"duration,omitempty"`
 	Seconds        string                 `json:"seconds,omitempty"`
 	InputReference string                 `json:"input_reference,omitempty"`
@@ -686,7 +688,53 @@ func (t *TaskSubmitReq) GetPrompt() string {
 }
 
 func (t *TaskSubmitReq) HasImage() bool {
-	return len(t.Images) > 0
+	return strings.TrimSpace(t.Image) != "" || len(t.Images) > 0
+}
+
+func parseTaskImage(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", nil
+	}
+	var imageURL string
+	if err := common.Unmarshal(raw, &imageURL); err == nil {
+		return strings.TrimSpace(imageURL), nil
+	}
+	var imageObject struct {
+		URL string `json:"url"`
+	}
+	if err := common.Unmarshal(raw, &imageObject); err == nil && strings.TrimSpace(imageObject.URL) != "" {
+		return strings.TrimSpace(imageObject.URL), nil
+	}
+	return "", fmt.Errorf("image must be a URL string or an object containing url")
+}
+
+func parseTaskImages(raw json.RawMessage) ([]string, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var imageURLs []string
+	if err := common.Unmarshal(raw, &imageURLs); err == nil {
+		for i := range imageURLs {
+			imageURLs[i] = strings.TrimSpace(imageURLs[i])
+		}
+		return imageURLs, nil
+	}
+	var imageObjects []struct {
+		URL string `json:"url"`
+	}
+	if err := common.Unmarshal(raw, &imageObjects); err == nil {
+		imageURLs = make([]string, 0, len(imageObjects))
+		for _, imageObject := range imageObjects {
+			if imageURL := strings.TrimSpace(imageObject.URL); imageURL != "" {
+				imageURLs = append(imageURLs, imageURL)
+			}
+		}
+		return imageURLs, nil
+	}
+	if imageURL, err := parseTaskImage(raw); err == nil && imageURL != "" {
+		return []string{imageURL}, nil
+	}
+	return nil, fmt.Errorf("images must be URL strings or objects containing url")
 }
 
 func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
@@ -694,12 +742,24 @@ func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
 	aux := &struct {
 		Metadata json.RawMessage `json:"metadata,omitempty"`
 		Duration json.RawMessage `json:"duration,omitempty"`
+		Image    json.RawMessage `json:"image,omitempty"`
+		Images   json.RawMessage `json:"images,omitempty"`
 		*Alias
 	}{
 		Alias: (*Alias)(t),
 	}
 
 	if err := common.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	var err error
+	t.Image, err = parseTaskImage(aux.Image)
+	if err != nil {
+		return err
+	}
+	t.Images, err = parseTaskImages(aux.Images)
+	if err != nil {
 		return err
 	}
 
