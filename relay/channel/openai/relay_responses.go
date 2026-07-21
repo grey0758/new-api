@@ -92,7 +92,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	var usage = &dto.Usage{}
 	var responseTextBuilder strings.Builder
 	completed := false
-	var streamErr error
+	var streamErr *types.NewAPIError
 	modelName := responsesStreamModelName(info)
 	channelID := responsesStreamChannelID(info)
 
@@ -174,7 +174,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 
 		if isResponsesStreamFatalEvent(streamResponse) {
-			streamErr = responsesStreamFatalEventError(streamResponse)
+			streamErr = responsesStreamFatalEventNewAPIError(streamResponse)
 			service.RecordResponsesStreamGuard(c, modelName)
 			if info.SendResponseCount == 0 && c != nil && c.Writer != nil && !c.Writer.Written() {
 				sr.Stop(streamErr)
@@ -201,10 +201,12 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	})
 
 	if streamErr != nil {
-		service.RecordResponsesStreamFailover(c, modelName, channelID)
+		if shouldFailoverResponsesStreamFatalError(streamErr) {
+			service.RecordResponsesStreamFailover(c, modelName, channelID)
+		}
 		service.RecordResponsesStreamGuard(c, modelName)
 		if info.SendResponseCount == 0 && c != nil && c.Writer != nil && !c.Writer.Written() {
-			return nil, types.NewOpenAIError(streamErr, types.ErrorCodeResponsesStreamIncomplete, http.StatusServiceUnavailable)
+			return nil, streamErr
 		}
 		logger.LogError(c, streamErr.Error())
 	}
@@ -257,6 +259,31 @@ func responsesStreamFatalEventError(streamResponse dto.ResponsesStreamResponse) 
 		}
 	}
 	return fmt.Errorf("responses stream error: %s", streamResponse.Type)
+}
+
+func responsesStreamFatalEventNewAPIError(streamResponse dto.ResponsesStreamResponse) *types.NewAPIError {
+	if streamResponse.Response != nil {
+		if oaiErr := streamResponse.Response.GetOpenAIError(); oaiErr != nil {
+			candidate := types.WithOpenAIError(*oaiErr, http.StatusServiceUnavailable)
+			if service.IsRequestScopedUpstreamRejectionError(candidate) {
+				statusCode := http.StatusBadRequest
+				if strings.Contains(strings.ToLower(fmt.Sprintf("%v", oaiErr.Code)), "cyber_policy") {
+					statusCode = http.StatusForbidden
+				}
+				return types.WithOpenAIError(*oaiErr, statusCode, types.ErrOptionWithSkipRetry())
+			}
+			return candidate
+		}
+	}
+	return types.NewOpenAIError(
+		responsesStreamFatalEventError(streamResponse),
+		types.ErrorCodeBadResponse,
+		http.StatusServiceUnavailable,
+	)
+}
+
+func shouldFailoverResponsesStreamFatalError(err *types.NewAPIError) bool {
+	return err != nil && !service.IsRequestScopedUpstreamRejectionError(err)
 }
 
 func shouldCommitResponsesStreamGuard(streamResponse dto.ResponsesStreamResponse, bufferedEvents int, bufferedBytes int) bool {

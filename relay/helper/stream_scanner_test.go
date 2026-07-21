@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -612,6 +614,29 @@ func TestStreamScannerHandler_StreamStatus_InitializedIfNil(t *testing.T) {
 	StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {})
 
 	assert.NotNil(t, info.StreamStatus)
+}
+
+func TestResolveStreamingTimeoutUsesResponsesChannelOverride(t *testing.T) {
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeResponses,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelOtherSettings: dto.ChannelOtherSettings{
+				ResponsesStreamIdleTimeoutSeconds: 120,
+			},
+		},
+	}
+	require.Equal(t, 120*time.Second, resolveStreamingTimeout(info))
+
+	info.RelayMode = relayconstant.RelayModeChatCompletions
+	require.Equal(t, 30*time.Second, resolveStreamingTimeout(info))
+
+	info.RelayMode = relayconstant.RelayModeResponses
+	info.ChannelOtherSettings.ResponsesStreamIdleTimeoutSeconds = maxResponsesStreamIdleTimeoutSeconds + 1
+	require.Equal(t, 30*time.Second, resolveStreamingTimeout(info))
 }
 
 func TestStreamScannerHandler_StreamStatus_PreInitialized(t *testing.T) {

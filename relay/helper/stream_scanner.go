@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
@@ -22,9 +23,10 @@ import (
 )
 
 const (
-	InitialScannerBufferSize    = 64 << 10 // 64KB (64*1024)
-	DefaultMaxScannerBufferSize = 64 << 20 // 64MB (64*1024*1024) default SSE buffer size
-	DefaultPingInterval         = 10 * time.Second
+	InitialScannerBufferSize             = 64 << 10 // 64KB (64*1024)
+	DefaultMaxScannerBufferSize          = 64 << 20 // 64MB (64*1024*1024) default SSE buffer size
+	DefaultPingInterval                  = 10 * time.Second
+	maxResponsesStreamIdleTimeoutSeconds = 3600
 )
 
 func getScannerBufferSize() int {
@@ -32,6 +34,20 @@ func getScannerBufferSize() int {
 		return constant.StreamScannerMaxBufferMB << 20
 	}
 	return DefaultMaxScannerBufferSize
+}
+
+func resolveStreamingTimeout(info *relaycommon.RelayInfo) time.Duration {
+	timeoutSeconds := constant.StreamingTimeout
+	if info != nil && info.RelayMode == relayconstant.RelayModeResponses {
+		override := info.ChannelOtherSettings.ResponsesStreamIdleTimeoutSeconds
+		if override > 0 && override <= maxResponsesStreamIdleTimeoutSeconds {
+			timeoutSeconds = override
+		}
+	}
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 300
+	}
+	return time.Duration(timeoutSeconds) * time.Second
 }
 
 func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, dataHandler func(data string, sr *StreamResult)) {
@@ -50,7 +66,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		}
 	}()
 
-	streamingTimeout := time.Duration(constant.StreamingTimeout) * time.Second
+	streamingTimeout := resolveStreamingTimeout(info)
 
 	var (
 		stopChan   = make(chan bool, 3) // 增加缓冲区避免阻塞

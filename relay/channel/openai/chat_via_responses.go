@@ -2,6 +2,7 @@ package openai
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -53,7 +54,13 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	}
 
 	if err := common.Unmarshal(body, &responsesResp); err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		if looksLikeResponsesEventStreamBody(body) {
+			fallbackResp := new(http.Response)
+			*fallbackResp = *resp
+			fallbackResp.Body = io.NopCloser(bytes.NewReader(body))
+			return OaiResponsesStreamToChatHandler(c, info, fallbackResp)
+		}
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
 	}
 
 	if oaiError := responsesResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
@@ -225,6 +232,9 @@ func OaiResponsesStreamToChatHandler(c *gin.Context, info *relaycommon.RelayInfo
 		if line == "" {
 			continue
 		}
+		if isResponsesSSEControlLine(line) {
+			continue
+		}
 		if strings.HasPrefix(line, "data:") {
 			line = strings.TrimSpace(line[5:])
 		}
@@ -318,12 +328,7 @@ func OaiResponsesStreamToChatHandler(c *gin.Context, info *relaycommon.RelayInfo
 					}
 				}
 			case "response.error", "response.failed":
-				if streamResp.Response != nil {
-					if oaiErr := streamResp.Response.GetOpenAIError(); oaiErr != nil && oaiErr.Type != "" {
-						return nil, types.WithOpenAIError(*oaiErr, http.StatusInternalServerError)
-					}
-				}
-				return nil, types.NewOpenAIError(fmt.Errorf("responses stream error: %s", streamResp.Type), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+				return nil, responsesStreamFatalEventNewAPIError(streamResp)
 			}
 			continue
 		}
@@ -331,7 +336,7 @@ func OaiResponsesStreamToChatHandler(c *gin.Context, info *relaycommon.RelayInfo
 		var chatChunk dto.ChatCompletionsStreamResponse
 		if err := common.UnmarshalJsonStr(line, &chatChunk); err != nil {
 			logger.LogError(c, "failed to unmarshal responses compatibility stream event: "+err.Error())
-			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
 		}
 		if chatChunk.Id != "" {
 			responseId = chatChunk.Id
@@ -821,14 +826,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			}
 
 		case "response.error", "response.failed":
-			if streamResp.Response != nil {
-				if oaiErr := streamResp.Response.GetOpenAIError(); oaiErr != nil && oaiErr.Type != "" {
-					streamErr = types.WithOpenAIError(*oaiErr, http.StatusInternalServerError)
-					sr.Stop(streamErr)
-					return
-				}
-			}
-			streamErr = types.NewOpenAIError(fmt.Errorf("responses stream error: %s", streamResp.Type), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			streamErr = responsesStreamFatalEventNewAPIError(streamResp)
 			sr.Stop(streamErr)
 			return
 
@@ -872,4 +870,53 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		helper.Done(c)
 	}
 	return usage, nil
+}
+
+func looksLikeResponsesEventStreamBody(body []byte) bool {
+	scanner := bufio.NewScanner(bytes.NewReader(body))
+	scanner.Buffer(make([]byte, helper.InitialScannerBufferSize), helper.DefaultMaxScannerBufferSize)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if isResponsesSSEControlLine(line) {
+			continue
+		}
+		if !strings.HasPrefix(line, "data:") {
+			return false
+		}
+		payload := strings.TrimSpace(line[5:])
+		if payload == "" {
+			continue
+		}
+		if strings.HasPrefix(payload, "[DONE]") {
+			return true
+		}
+		var streamResp dto.ResponsesStreamResponse
+		if err := common.UnmarshalJsonStr(payload, &streamResp); err == nil {
+			switch streamResp.Type {
+			case "response.completed", "response.error", "response.failed":
+				return true
+			}
+			continue
+		}
+		var chatChunk dto.ChatCompletionsStreamResponse
+		if err := common.UnmarshalJsonStr(payload, &chatChunk); err != nil {
+			return false
+		}
+		for _, choice := range chatChunk.Choices {
+			if choice.FinishReason != nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isResponsesSSEControlLine(line string) bool {
+	return strings.HasPrefix(line, ":") ||
+		strings.HasPrefix(line, "event:") ||
+		strings.HasPrefix(line, "id:") ||
+		strings.HasPrefix(line, "retry:")
 }

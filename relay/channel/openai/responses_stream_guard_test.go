@@ -1,11 +1,13 @@
 package openai
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/types"
+	"github.com/stretchr/testify/require"
 )
 
 func TestIsResponsesStreamFatalEvent(t *testing.T) {
@@ -28,6 +30,42 @@ func TestIsResponsesStreamFatalEvent(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResponsesStreamFatalEventCyberPolicyIsRequestScoped(t *testing.T) {
+	err := responsesStreamFatalEventNewAPIError(dto.ResponsesStreamResponse{
+		Type: "response.failed",
+		Response: &dto.OpenAIResponsesResponse{
+			Error: types.OpenAIError{
+				Message: "content rejected",
+				Type:    "invalid_request_error",
+				Code:    "cyber_policy",
+			},
+		},
+	})
+
+	require.Equal(t, http.StatusForbidden, err.StatusCode)
+	require.Equal(t, types.ErrorCode("cyber_policy"), err.GetErrorCode())
+	require.True(t, types.IsSkipRetryError(err))
+	require.False(t, shouldFailoverResponsesStreamFatalError(err))
+}
+
+func TestResponsesStreamFatalEventRateLimitRemainsFailoverEligible(t *testing.T) {
+	err := responsesStreamFatalEventNewAPIError(dto.ResponsesStreamResponse{
+		Type: "response.failed",
+		Response: &dto.OpenAIResponsesResponse{
+			Error: types.OpenAIError{
+				Message: "retry later",
+				Type:    "server_error",
+				Code:    "rate_limit_exceeded",
+			},
+		},
+	})
+
+	require.Equal(t, http.StatusServiceUnavailable, err.StatusCode)
+	require.Equal(t, types.ErrorCode("rate_limit_exceeded"), err.GetErrorCode())
+	require.False(t, types.IsSkipRetryError(err))
+	require.True(t, shouldFailoverResponsesStreamFatalError(err))
 }
 
 func TestResponsesStreamFatalEventErrorIncludesUpstreamMessage(t *testing.T) {
