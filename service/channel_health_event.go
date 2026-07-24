@@ -73,7 +73,7 @@ func RecordRelayChannelHealthEvent(c *gin.Context, channelError types.ChannelErr
 }
 
 func RecordFinalChannelHealthError(c *gin.Context, err *types.NewAPIError) {
-	if c == nil || err == nil {
+	if c == nil || err == nil || !types.IsRecordErrorLog(err) {
 		return
 	}
 	channelID := c.GetInt("channel_id")

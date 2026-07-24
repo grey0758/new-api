@@ -160,6 +160,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				types.ErrorCode(decision.ErrorCode),
 				decision.StatusCode,
 				types.ErrOptionWithSkipRetry(),
+				types.ErrOptionWithNoRecordErrorLog(),
 			)
 			return
 		default:
