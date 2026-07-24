@@ -113,6 +113,7 @@ const TopUp = () => {
   const [topupInfo, setTopupInfo] = useState({
     amount_options: [],
     discount: {},
+    external_purchase_links: {},
   });
 
   const confirmPayMethods = [
@@ -600,9 +601,11 @@ const TopUp = () => {
       const res = await API.get('/api/user/topup/info');
       const { message, data, success } = res.data;
       if (success) {
+        const externalPurchaseLinks = data.external_purchase_links || {};
         setTopupInfo({
           amount_options: data.amount_options || [],
           discount: data.discount || {},
+          external_purchase_links: externalPurchaseLinks,
         });
 
         // 处理支付方式
@@ -694,24 +697,30 @@ const TopUp = () => {
             setCreemProducts([]);
           }
 
-          // 如果没有自定义充值数量选项，根据最小充值金额生成预设充值额度选项
-          if (topupInfo.amount_options.length === 0) {
-            setPresetAmounts(generatePresetAmounts(minTopUpValue));
-          }
-
           // 初始化显示实付金额
           getAmount(minTopUpValue);
         } catch (e) {
           setPayMethods([]);
         }
 
-        // 如果有自定义充值数量选项，使用它们替换默认的预设选项
+        const withPurchaseLink = (preset) => ({
+          ...preset,
+          purchaseLink:
+            externalPurchaseLinks[preset.value] ||
+            externalPurchaseLinks[String(preset.value)] ||
+            '',
+        });
+
         if (data.amount_options && data.amount_options.length > 0) {
           const customPresets = data.amount_options.map((amount) => ({
             value: amount,
             discount: data.discount[amount] || 1.0,
           }));
-          setPresetAmounts(customPresets);
+          setPresetAmounts(customPresets.map(withPurchaseLink));
+        } else {
+          setPresetAmounts(
+            generatePresetAmounts(minTopUpValue).map(withPurchaseLink),
+          );
         }
       } else {
         showError(data || t('获取充值配置失败'));

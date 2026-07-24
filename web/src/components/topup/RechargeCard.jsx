@@ -33,6 +33,7 @@ import {
   Tooltip,
   Tabs,
   TabPane,
+  Tag,
 } from '@douyinfe/semi-ui';
 import { SiAlipay, SiWechat, SiStripe } from 'react-icons/si';
 import {
@@ -105,6 +106,9 @@ const RechargeCard = ({
   const shouldShowSubscription =
     !subscriptionLoading && subscriptionPlans.length > 0;
   const regularPayMethods = payMethods || [];
+  const hasExternalPurchaseLinks = presetAmounts.some((preset) =>
+    Boolean(preset.purchaseLink),
+  );
   const isWxDaEpayMethod = (type) =>
     typeof type === 'string' && type.startsWith('wxda_epay:');
 
@@ -234,7 +238,8 @@ const RechargeCard = ({
           enableCreemTopUp ||
           enableWaffoTopUp ||
           enableWaffoPancakeTopUp ||
-          enableWxDaEpayTopUp ? (
+          enableWxDaEpayTopUp ||
+          hasExternalPurchaseLinks ? (
           <Form
             getFormApi={(api) => (onlineFormApiRef.current = api)}
             initValues={{ topUpCount: topUpCount }}
@@ -414,7 +419,8 @@ const RechargeCard = ({
               {(enableOnlineTopUp ||
                 enableStripeTopUp ||
                 enableWaffoTopUp ||
-                enableWxDaEpayTopUp) && (
+                enableWxDaEpayTopUp ||
+                hasExternalPurchaseLinks) && (
                 <Form.Slot
                   label={
                     <div className='flex items-center gap-2'>
@@ -493,6 +499,14 @@ const RechargeCard = ({
                           }}
                           bodyStyle={{ padding: '12px' }}
                           onClick={() => {
+                            if (preset.purchaseLink) {
+                              window.open(
+                                preset.purchaseLink,
+                                '_blank',
+                                'noopener,noreferrer',
+                              );
+                              return;
+                            }
                             selectPresetAmount(preset);
                             onlineFormApiRef.current?.setValue(
                               'topUpCount',
@@ -501,37 +515,67 @@ const RechargeCard = ({
                           }}
                         >
                           <div style={{ textAlign: 'center' }}>
-                            <Typography.Title
-                              heading={6}
-                              style={{ margin: '0 0 8px 0' }}
-                            >
-                              <Coins size={18} />
-                              {formatLargeNumber(displayValue)} {symbol}
-                              {hasDiscount && (
-                                <Tag style={{ marginLeft: 4 }} color='green'>
-                                  {t('折').includes('off')
-                                    ? (
-                                        (1 - parseFloat(discount)) *
-                                        100
-                                      ).toFixed(1)
-                                    : (discount * 10).toFixed(1)}
-                                  {t('折')}
-                                </Tag>
-                              )}
-                            </Typography.Title>
-                            <div
-                              style={{
-                                color: 'var(--semi-color-text-2)',
-                                fontSize: '12px',
-                                margin: '4px 0',
-                              }}
-                            >
-                              {t('实付')} {symbol}
-                              {displayActualPay.toFixed(2)}，
-                              {hasDiscount
-                                ? `${t('节省')} ${symbol}${displaySave.toFixed(2)}`
-                                : `${t('节省')} ${symbol}0.00`}
-                            </div>
+                            {preset.purchaseLink ? (
+                              <>
+                                <Typography.Title
+                                  heading={6}
+                                  style={{ margin: '0 0 8px 0' }}
+                                >
+                                  <Coins size={18} />${preset.value} {t('额度')}
+                                </Typography.Title>
+                                <Button
+                                  theme='solid'
+                                  type='primary'
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    window.open(
+                                      preset.purchaseLink,
+                                      '_blank',
+                                      'noopener,noreferrer',
+                                    );
+                                  }}
+                                >
+                                  {t('立即购买')}
+                                </Button>
+                              </>
+                            ) : (
+                              <>
+                                <Typography.Title
+                                  heading={6}
+                                  style={{ margin: '0 0 8px 0' }}
+                                >
+                                  <Coins size={18} />
+                                  {formatLargeNumber(displayValue)} {symbol}
+                                  {hasDiscount && (
+                                    <Tag
+                                      style={{ marginLeft: 4 }}
+                                      color='green'
+                                    >
+                                      {t('折').includes('off')
+                                        ? (
+                                            (1 - parseFloat(discount)) *
+                                            100
+                                          ).toFixed(1)
+                                        : (discount * 10).toFixed(1)}
+                                      {t('折')}
+                                    </Tag>
+                                  )}
+                                </Typography.Title>
+                                <div
+                                  style={{
+                                    color: 'var(--semi-color-text-2)',
+                                    fontSize: '12px',
+                                    margin: '4px 0',
+                                  }}
+                                >
+                                  {t('实付')} {symbol}
+                                  {displayActualPay.toFixed(2)}，
+                                  {hasDiscount
+                                    ? `${t('节省')} ${symbol}${displaySave.toFixed(2)}`
+                                    : `${t('节省')} ${symbol}0.00`}
+                                </div>
+                              </>
+                            )}
                           </div>
                         </Card>
                       );
