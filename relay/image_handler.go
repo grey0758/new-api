@@ -87,7 +87,11 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
-		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
+		options := []types.NewAPIErrorOptions(nil)
+		if service.GeneratedAssetsEnabled() {
+			options = append(options, types.ErrOptionWithSkipRetry())
+		}
+		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError, options...)
 	}
 	var httpResp *http.Response
 	if resp != nil {
@@ -101,16 +105,78 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 				newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 				// reset status code 重置状态码
 				service.ResetStatusCode(newAPIError, statusCodeMappingStr)
+				if service.GeneratedAssetsEnabled() {
+					newAPIError = types.NewError(newAPIError, newAPIError.GetErrorCode(), types.ErrOptionWithSkipRetry())
+				}
 				return newAPIError
 			}
 		}
 	}
 
+	originalWriter := c.Writer
+	var captureWriter *imageResponseCaptureWriter
+	if service.GeneratedAssetsEnabled() {
+		captureWriter = newImageResponseCaptureWriter(originalWriter)
+		c.Writer = captureWriter
+	}
+
 	usage, newAPIError := adaptor.DoResponse(c, httpResp, info)
+	if captureWriter != nil {
+		c.Writer = originalWriter
+	}
 	if newAPIError != nil {
+		if captureWriter != nil {
+			clearCapturedImageResponseHeaders(originalWriter)
+			_ = service.MarkGeneratedImageRequestStorageFailed(
+				info.RequestId,
+				http.StatusBadGateway,
+				"generated_asset_upstream_result_unpersisted",
+			)
+			return types.NewErrorWithStatusCode(
+				fmt.Errorf("generated image upstream result could not be persisted: %w", newAPIError),
+				types.ErrorCode("generated_asset_upstream_result_unpersisted"),
+				http.StatusBadGateway,
+				types.ErrOptionWithSkipRetry(),
+			)
+		}
 		// reset status code 重置状态码
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 		return newAPIError
+	}
+
+	if captureWriter != nil {
+		var imageResponse dto.ImageResponse
+		if err := common.Unmarshal(captureWriter.body.Bytes(), &imageResponse); err != nil {
+			clearCapturedImageResponseHeaders(originalWriter)
+			_ = service.MarkGeneratedImageRequestStorageFailed(
+				info.RequestId,
+				http.StatusBadGateway,
+				"generated_asset_response_parse_failed",
+			)
+			return types.NewErrorWithStatusCode(
+				fmt.Errorf("parse image response for persistence: %w", err),
+				types.ErrorCode("generated_asset_response_parse_failed"),
+				http.StatusBadGateway,
+				types.ErrOptionWithSkipRetry(),
+			)
+		}
+		if err := service.PersistGeneratedImageResponse(c, info, request, &imageResponse); err != nil {
+			clearCapturedImageResponseHeaders(originalWriter)
+			return types.NewErrorWithStatusCode(
+				err,
+				types.ErrorCode("generated_asset_persistence_failed"),
+				http.StatusServiceUnavailable,
+				types.ErrOptionWithSkipRetry(),
+			)
+		}
+		responseBody, err := common.Marshal(imageResponse)
+		if err != nil {
+			clearCapturedImageResponseHeaders(originalWriter)
+			return types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		}
+		if err := writeCapturedImageResponse(originalWriter, captureWriter.Status(), responseBody); err != nil {
+			logger.LogError(c, "generated image was persisted but the response could not be delivered: "+err.Error())
+		}
 	}
 
 	imageN := uint(1)

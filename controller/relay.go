@@ -124,6 +124,68 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
+	imageRequestTracked := false
+	if relayFormat == types.RelayFormatOpenAIImage && service.GeneratedAssetsEnabled() {
+		imageRequest, ok := request.(*dto.ImageRequest)
+		if !ok {
+			newAPIError = types.NewError(
+				fmt.Errorf("invalid image request type %T", request),
+				types.ErrorCodeInvalidRequest,
+				types.ErrOptionWithSkipRetry(),
+			)
+			return
+		}
+		decision, prepareErr := service.PrepareGeneratedImageRequest(c, relayInfo, imageRequest)
+		if prepareErr != nil {
+			newAPIError = types.NewErrorWithStatusCode(
+				prepareErr,
+				types.ErrorCode("generated_asset_runtime_unavailable"),
+				http.StatusServiceUnavailable,
+				types.ErrOptionWithSkipRetry(),
+			)
+			return
+		}
+		switch decision.Action {
+		case service.GeneratedImageDecisionProceed:
+			imageRequestTracked = true
+		case service.GeneratedImageDecisionReplay:
+			c.Header("X-Idempotent-Replay", "true")
+			c.Header("X-Original-Request-Id", decision.RequestId)
+			c.Data(decision.StatusCode, "application/json; charset=utf-8", decision.ResponseBody)
+			return
+		case service.GeneratedImageDecisionReject:
+			c.Header("X-Original-Request-Id", decision.RequestId)
+			newAPIError = types.NewErrorWithStatusCode(
+				errors.New(decision.ErrorMessage),
+				types.ErrorCode(decision.ErrorCode),
+				decision.StatusCode,
+				types.ErrOptionWithSkipRetry(),
+			)
+			return
+		default:
+			newAPIError = types.NewErrorWithStatusCode(
+				errors.New("invalid generated image idempotency decision"),
+				types.ErrorCode("idempotency_internal_error"),
+				http.StatusInternalServerError,
+				types.ErrOptionWithSkipRetry(),
+			)
+			return
+		}
+	}
+
+	defer func() {
+		if !imageRequestTracked || newAPIError == nil {
+			return
+		}
+		errorCode := newAPIError.GetErrorCode()
+		if errorCode == "" {
+			errorCode = "image_generation_failed"
+		}
+		if err := service.MarkGeneratedImageRequestFailed(relayInfo.RequestId, newAPIError.StatusCode, string(errorCode)); err != nil {
+			logger.LogError(c, "failed to record generated image request failure: "+err.Error())
+		}
+	}()
+
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needSecurityPromptCapture := service.PromptViolationCaptureEnabled()
 	needCountToken := constant.CountToken
@@ -235,6 +297,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				relayInfo.LastError = nil
 				if !service.HasResponsesStreamIncomplete(c) {
 					service.ClearResponsesStreamFailover(c, relayInfo.OriginModelName)
+				}
+				if imageRequestTracked {
+					if err := service.MarkGeneratedImageRequestSucceeded(relayInfo.RequestId); err != nil {
+						logger.LogError(c, "failed to mark generated image request succeeded: "+err.Error())
+					}
 				}
 				return
 			}

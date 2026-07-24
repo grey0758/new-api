@@ -311,9 +311,11 @@ type ImageResponse struct {
 	Data     []ImageData     `json:"data"`
 	Created  int64           `json:"created"`
 	Metadata json.RawMessage `json:"metadata,omitempty"`
+	TaskId   string          `json:"task_id,omitempty"`
 }
 type ImageData struct {
 	Url           string `json:"url"`
 	B64Json       string `json:"b64_json"`
 	RevisedPrompt string `json:"revised_prompt"`
+	TaskId        string `json:"task_id,omitempty"`
 }

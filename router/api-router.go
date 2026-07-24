@@ -333,6 +333,14 @@ func SetApiRouter(router *gin.Engine) {
 		dataRoute.GET("/users", middleware.AdminAuth(), controller.GetQuotaDatesByUser)
 		dataRoute.GET("/self", middleware.UserAuth(), controller.GetUserQuotaDates)
 
+		generatedImageTaskRoute := apiRouter.Group("/image/tasks")
+		generatedImageTaskRoute.Use(middleware.UserAuth())
+		{
+			generatedImageTaskRoute.GET("/self", controller.ListGeneratedImageTasks)
+			generatedImageTaskRoute.GET("/:task_id", controller.GetGeneratedImageTask)
+			generatedImageTaskRoute.GET("/:task_id/content", controller.GetGeneratedImageTaskContent)
+		}
+
 		logRoute.Use(middleware.CORS(), middleware.CriticalRateLimit())
 		{
 			logRoute.GET("/token", middleware.TokenAuthReadOnly(), controller.GetLogByKey)

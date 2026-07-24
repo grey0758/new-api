@@ -72,6 +72,12 @@ func SetRelayRouter(router *gin.Engine) {
 	relayV1Router.Use(middleware.TokenAuth())
 	relayV1Router.Use(middleware.ModelRequestRateLimit())
 	{
+		generatedImageTaskRouter := relayV1Router.Group("/images/tasks")
+		generatedImageTaskRouter.GET("", controller.ListGeneratedImageTasks)
+		generatedImageTaskRouter.GET("/:task_id", controller.GetGeneratedImageTask)
+		generatedImageTaskRouter.GET("/:task_id/content", controller.GetGeneratedImageTaskContent)
+	}
+	{
 		// WebSocket 路由（统一到 Relay）
 		wsRouter := relayV1Router.Group("")
 		wsRouter.Use(middleware.Distribute())
