@@ -67,7 +67,11 @@ func formatUserLogs(logs []*Log, startIdx int) {
 }
 
 func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
-	err = LOG_DB.Model(&Log{}).Where("token_id = ?", tokenId).Order("id desc").Limit(common.MaxRecentItems).Find(&logs).Error
+	err = LOG_DB.Model(&Log{}).
+		Where("token_id = ? AND type <> ?", tokenId, LogTypeSystem).
+		Order("id desc").
+		Limit(common.MaxRecentItems).
+		Find(&logs).Error
 	formatUserLogs(logs, 0)
 	return logs, err
 }
@@ -384,9 +388,9 @@ const logSearchCountLimit = 10000
 func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
-		tx = LOG_DB.Where("logs.user_id = ?", userId)
+		tx = LOG_DB.Where("logs.user_id = ? AND logs.type <> ?", userId, LogTypeSystem)
 	} else {
-		tx = LOG_DB.Where("logs.user_id = ? and logs.type = ?", userId, logType)
+		tx = LOG_DB.Where("logs.user_id = ? AND logs.type = ? AND logs.type <> ?", userId, logType, LogTypeSystem)
 	}
 
 	if modelName != "" {
