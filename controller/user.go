@@ -29,6 +29,16 @@ type LoginRequest struct {
 	Password string `json:"password"`
 }
 
+func resolveInitialTokenGroup(userGroup string, defaultUseAutoGroup bool) string {
+	if defaultUseAutoGroup {
+		return "auto"
+	}
+	if group := strings.TrimSpace(userGroup); group != "" {
+		return group
+	}
+	return "default"
+}
+
 func Login(c *gin.Context) {
 	if !common.PasswordLoginEnabled {
 		common.ApiErrorI18n(c, i18n.MsgUserPasswordLoginDisabled)
@@ -223,10 +233,10 @@ func Register(c *gin.Context) {
 			RemainQuota:        500000, // 示例额度
 			UnlimitedQuota:     true,
 			ModelLimitsEnabled: false,
-			Group:              "default",
-		}
-		if setting.DefaultUseAutoGroup {
-			token.Group = "auto"
+			Group: resolveInitialTokenGroup(
+				insertedUser.Group,
+				setting.DefaultUseAutoGroup,
+			),
 		}
 		if err := token.Insert(); err != nil {
 			common.ApiErrorI18n(c, i18n.MsgCreateDefaultTokenErr)

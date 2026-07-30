@@ -42,6 +42,33 @@ func registrationChallengeContext(body string) (*gin.Context, *httptest.Response
 	return context, recorder
 }
 
+func TestResolveInitialTokenGroup(t *testing.T) {
+	tests := []struct {
+		name                string
+		userGroup           string
+		defaultUseAutoGroup bool
+		want                string
+	}{
+		{name: "preserves current user group", userGroup: "plus", want: "plus"},
+		{name: "falls back when user group is empty", want: "default"},
+		{
+			name:                "auto mode overrides current user group",
+			userGroup:           "plus",
+			defaultUseAutoGroup: true,
+			want:                "auto",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(
+				t,
+				test.want,
+				resolveInitialTokenGroup(test.userGroup, test.defaultUseAutoGroup),
+			)
+		})
+	}
+}
+
 func TestCreateRegistrationChallenge(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	originalRegisterEnabled := common.RegisterEnabled
