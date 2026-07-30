@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
@@ -132,6 +133,7 @@ func TestRegisterConsumesValidChallengeAndRejectsReplay(t *testing.T) {
 	originalPasswordRegisterEnabled := common.PasswordRegisterEnabled
 	originalEmailVerificationEnabled := common.EmailVerificationEnabled
 	originalGenerateDefaultToken := constant.GenerateDefaultToken
+	originalDefaultUseAutoGroup := setting.DefaultUseAutoGroup
 	originalQuotaForNewUser := common.QuotaForNewUser
 	originalQuotaForInviter := common.QuotaForInviter
 	originalQuotaForInvitee := common.QuotaForInvitee
@@ -142,6 +144,7 @@ func TestRegisterConsumesValidChallengeAndRejectsReplay(t *testing.T) {
 		common.PasswordRegisterEnabled = originalPasswordRegisterEnabled
 		common.EmailVerificationEnabled = originalEmailVerificationEnabled
 		constant.GenerateDefaultToken = originalGenerateDefaultToken
+		setting.DefaultUseAutoGroup = originalDefaultUseAutoGroup
 		common.QuotaForNewUser = originalQuotaForNewUser
 		common.QuotaForInviter = originalQuotaForInviter
 		common.QuotaForInvitee = originalQuotaForInvitee
@@ -157,13 +160,14 @@ func TestRegisterConsumesValidChallengeAndRejectsReplay(t *testing.T) {
 	t.Cleanup(func() {
 		_ = sqlDB.Close()
 	})
-	require.NoError(t, db.AutoMigrate(&model.User{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}))
 	model.DB = db
 	common.RedisEnabled = false
 	common.RegisterEnabled = true
 	common.PasswordRegisterEnabled = true
 	common.EmailVerificationEnabled = false
-	constant.GenerateDefaultToken = false
+	constant.GenerateDefaultToken = true
+	setting.DefaultUseAutoGroup = false
 	common.QuotaForNewUser = 0
 	common.QuotaForInviter = 0
 	common.QuotaForInvitee = 0
@@ -190,6 +194,12 @@ func TestRegisterConsumesValidChallengeAndRejectsReplay(t *testing.T) {
 	var registerResponse registrationChallengeAPIResponse
 	require.NoError(t, common.Unmarshal(registerRecorder.Body.Bytes(), &registerResponse))
 	require.True(t, registerResponse.Success)
+
+	var registeredUser model.User
+	require.NoError(t, db.Where("username = ?", "alice").First(&registeredUser).Error)
+	var initialToken model.Token
+	require.NoError(t, db.Where("user_id = ?", registeredUser.Id).First(&initialToken).Error)
+	require.Equal(t, "default", initialToken.Group)
 
 	replayRecorder := httptest.NewRecorder()
 	replayContext, _ := gin.CreateTestContext(replayRecorder)
