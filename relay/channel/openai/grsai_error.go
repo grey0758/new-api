@@ -102,6 +102,8 @@ func isGrsaiContentPolicyViolation(payload grsaiImageErrorPayload) bool {
 		"policy violation",
 		"safety violation",
 		"content was flagged",
+		"may violate our content policies",
+		"violate our content policies",
 		"prompt blocked",
 	} {
 		if strings.Contains(combined, marker) {

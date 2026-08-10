@@ -497,6 +497,14 @@ func TestRequestScopedUpstreamRejectionDoesNotTriggerChannelCooldown(t *testing.
 				http.StatusServiceUnavailable,
 			),
 		},
+		{
+			name: "grsai policy wording",
+			err: types.NewOpenAIError(
+				errors.New("We are so sorry, but the prompt may violate our content policies."),
+				types.ErrorCodeBadResponseStatusCode,
+				http.StatusServiceUnavailable,
+			),
+		},
 	}
 
 	for i, tc := range cases {

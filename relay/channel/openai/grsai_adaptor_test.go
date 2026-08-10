@@ -264,6 +264,23 @@ func TestGrsaiImagePolicyViolationIsStableNonRetryable400(t *testing.T) {
 	require.False(t, service.IsTransientRelayFailoverError(err))
 }
 
+func TestGrsaiImagePolicyViolationMessageIsStableNonRetryable400(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Body: io.NopCloser(strings.NewReader(
+			`{"message":"We are so sorry, but the prompt may violate our content policies. If you think we got it wrong, please retry or edit your prompt."}`,
+		)),
+	}
+
+	err := GrsaiImageErrorHandler(context.Background(), resp)
+
+	require.NotNil(t, err)
+	require.Equal(t, http.StatusBadRequest, err.StatusCode)
+	require.Equal(t, types.ErrorCodeContentPolicyViolation, err.GetErrorCode())
+	require.True(t, types.IsSkipRetryError(err))
+	require.False(t, service.IsTransientRelayFailoverError(err))
+}
+
 func TestGrsaiImageNonPolicyErrorKeepsGenericUpstreamHandling(t *testing.T) {
 	resp := &http.Response{
 		StatusCode: http.StatusServiceUnavailable,
