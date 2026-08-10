@@ -75,7 +75,11 @@ func GrsaiImageErrorHandler(ctx context.Context, resp *http.Response) *types.New
 	// Reuse the existing generic parser for non-policy GrsAI failures so
 	// transient 5xx/429 and other provider errors keep their old behavior.
 	resp.Body = io.NopCloser(bytes.NewReader(body))
-	return service.RelayErrorHandler(ctx, resp, false)
+	fallback := service.RelayErrorHandler(ctx, resp, false)
+	if fallback != nil && fallback.StatusCode == http.StatusBadRequest && service.IsRequestScopedUpstreamRejectionError(fallback) {
+		return newGrsaiContentPolicyViolationError()
+	}
+	return fallback
 }
 
 func isGrsaiContentPolicyViolation(payload grsaiImageErrorPayload) bool {
