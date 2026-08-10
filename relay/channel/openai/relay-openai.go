@@ -613,6 +613,10 @@ func GrsaiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
+	if isGrsaiContentPolicyViolation(grsaiImageErrorPayload{Status: grsaiResp.Status}) {
+		return nil, newGrsaiContentPolicyViolationError()
+	}
+
 	if !strings.EqualFold(grsaiResp.Status, "succeeded") || len(grsaiResp.Results) == 0 {
 		return nil, types.NewOpenAIError(fmt.Errorf("grsai image request failed: status=%s", grsaiResp.Status), types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}

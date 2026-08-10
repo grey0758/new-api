@@ -1,14 +1,21 @@
 package openai
 
 import (
+	"context"
+	"io"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGrsaiImageGenerationUsesGenerateEndpoint(t *testing.T) {
@@ -240,4 +247,36 @@ func TestGrsaiStandardImageGenerationUsesRatioFor2KRequest(t *testing.T) {
 	if body["aspectRatio"] != "1:1" {
 		t.Fatalf("aspectRatio = %#v, want 1:1", body["aspectRatio"])
 	}
+}
+
+func TestGrsaiImagePolicyViolationIsStableNonRetryable400(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Body:       io.NopCloser(strings.NewReader(`{"status":"violation"}`)),
+	}
+
+	err := GrsaiImageErrorHandler(context.Background(), resp)
+
+	require.NotNil(t, err)
+	require.Equal(t, http.StatusBadRequest, err.StatusCode)
+	require.Equal(t, types.ErrorCodeContentPolicyViolation, err.GetErrorCode())
+	require.True(t, types.IsSkipRetryError(err))
+	require.False(t, service.IsTransientRelayFailoverError(err))
+}
+
+func TestGrsaiImageNonPolicyErrorKeepsGenericUpstreamHandling(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusServiceUnavailable,
+		Body: io.NopCloser(strings.NewReader(
+			`{"error":{"message":"temporarily unavailable","type":"server_error","code":"upstream_unavailable"}}`,
+		)),
+	}
+
+	err := GrsaiImageErrorHandler(context.Background(), resp)
+
+	require.NotNil(t, err)
+	require.Equal(t, http.StatusServiceUnavailable, err.StatusCode)
+	require.Equal(t, types.ErrorCode("upstream_unavailable"), err.GetErrorCode())
+	require.False(t, types.IsSkipRetryError(err))
+	require.True(t, service.IsTransientRelayFailoverError(err))
 }

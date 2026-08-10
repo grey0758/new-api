@@ -248,3 +248,22 @@ func TestSanitizeRelayErrorForUserKeepsClientRequestError(t *testing.T) {
 
 	require.Same(t, err, sanitizeRelayErrorForUser(c, err))
 }
+
+func TestSanitizeRelayErrorForUserKeepsProviderPolicyViolation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set("relay_channel_error_seen", true)
+	err := types.NewOpenAIError(
+		errors.New("Image request rejected by the provider content policy."),
+		types.ErrorCodeContentPolicyViolation,
+		http.StatusBadRequest,
+		types.ErrOptionWithSkipRetry(),
+	)
+
+	sanitized := sanitizeRelayErrorForUser(c, err)
+
+	require.Same(t, err, sanitized)
+	require.Equal(t, http.StatusBadRequest, sanitized.StatusCode)
+	require.Equal(t, types.ErrorCodeContentPolicyViolation, sanitized.GetErrorCode())
+	require.False(t, service.IsTransientRelayFailoverError(sanitized))
+}

@@ -511,6 +511,44 @@ func TestRequestScopedUpstreamRejectionDoesNotTriggerChannelCooldown(t *testing.
 	}
 }
 
+func TestGrsaiImagePolicyViolationDoesNotTriggerChannelCooldown(t *testing.T) {
+	originalEnabled := common.AutomaticChannelCooldownEnabled
+	originalRedisEnabled := common.RedisEnabled
+	originalThreshold := common.ChannelCooldownFailureThreshold
+	originalWindow := common.ChannelCooldownFailureWindowSeconds
+	originalCooldown := common.ChannelCooldownSeconds
+	t.Cleanup(func() {
+		common.AutomaticChannelCooldownEnabled = originalEnabled
+		common.RedisEnabled = originalRedisEnabled
+		common.ChannelCooldownFailureThreshold = originalThreshold
+		common.ChannelCooldownFailureWindowSeconds = originalWindow
+		common.ChannelCooldownSeconds = originalCooldown
+		channelCooldownMu.Lock()
+		channelCooldownLocal = map[int]channelCooldownEntry{}
+		channelCooldownMu.Unlock()
+	})
+
+	common.AutomaticChannelCooldownEnabled = true
+	common.RedisEnabled = false
+	common.ChannelCooldownFailureThreshold = 1
+	common.ChannelCooldownFailureWindowSeconds = 60
+	common.ChannelCooldownSeconds = 60
+
+	err := types.NewOpenAIError(
+		errors.New("Image request rejected by the provider content policy."),
+		types.ErrorCodeContentPolicyViolation,
+		http.StatusBadRequest,
+		types.ErrOptionWithSkipRetry(),
+	)
+	channelError := *types.NewChannelError(42, 1, "grsai-policy", false, "", true)
+
+	require.True(t, types.IsSkipRetryError(err))
+	require.True(t, IsRequestScopedUpstreamRejectionError(err))
+	require.False(t, IsTransientRelayFailoverError(err))
+	RecordChannelFailureForCooldown(channelError, err)
+	require.False(t, IsChannelCoolingDown(channelError.ChannelId))
+}
+
 func TestProviderTransientLimitErrorsDoNotTriggerChannelCooldown(t *testing.T) {
 	originalEnabled := common.AutomaticChannelCooldownEnabled
 	originalRedisEnabled := common.RedisEnabled

@@ -226,6 +226,8 @@ func IsRequestScopedUpstreamRejectionError(err *types.NewAPIError) bool {
 		"cyber_policy",
 		"cybersecurity risk",
 		"content was flagged",
+		"content policy violation",
+		"content_policy_violation",
 		"no tool call found for function call output",
 		"function call output with call_id",
 	}

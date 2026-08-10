@@ -75,6 +75,7 @@ const (
 	ErrorCodeBadResponseBody           ErrorCode = "bad_response_body"
 	ErrorCodeEmptyResponse             ErrorCode = "empty_response"
 	ErrorCodeResponsesStreamIncomplete ErrorCode = "responses_stream_incomplete"
+	ErrorCodeContentPolicyViolation    ErrorCode = "content_policy_violation"
 	ErrorCodeAwsInvokeError            ErrorCode = "aws_invoke_error"
 	ErrorCodeModelNotFound             ErrorCode = "model_not_found"
 	ErrorCodePromptBlocked             ErrorCode = "prompt_blocked"
