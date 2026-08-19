@@ -212,6 +212,8 @@ func GetChannelHealth(c *gin.Context) {
 			"channel_cooldown_probe_enabled":         common.ChannelCooldownProbeEnabled,
 			"channel_cooldown_probe_interval":        common.ChannelCooldownProbeIntervalSeconds,
 			"channel_cooldown_probe_timeout":         common.ChannelCooldownProbeTimeoutSeconds,
+			"channel_cooldown_probe_endpoint":        service.ChannelCooldownProbeEndpoint,
+			"channel_cooldown_probe_protocol":        service.ChannelCooldownProbeProtocol,
 			"automatic_disable_channel_enabled":      common.AutomaticDisableChannelEnabled,
 			"automatic_enable_channel_enabled":       common.AutomaticEnableChannelEnabled,
 			"channel_disable_threshold_seconds":      common.ChannelDisableThreshold,

@@ -1099,6 +1099,11 @@ const ChannelHealth = () => {
             {t('冷却时长')} {settings.channel_cooldown_seconds || '-'}s,{' '}
             {t('探针')}{' '}
             {settings.channel_cooldown_probe_enabled ? t('开启') : t('关闭')},{' '}
+            {t('端点')}{' '}
+            {settings.channel_cooldown_probe_protocol === 'openai-response'
+              ? `OpenAI Response (${settings.channel_cooldown_probe_endpoint || '/v1/responses'})`
+              : settings.channel_cooldown_probe_endpoint || '-'}
+            ,{' '}
             {t('范围')} {settings.channel_cooldown_probe_scope || '-'}
           </Text>
         </div>

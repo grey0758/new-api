@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -77,6 +76,11 @@ var (
 
 const channelCooldownProbeRecentErrorWindow = time.Hour
 const channelCooldownProbeModel = "gpt-5.5"
+
+const (
+	ChannelCooldownProbeEndpoint = "/v1/responses"
+	ChannelCooldownProbeProtocol = "openai-response"
+)
 
 const (
 	channelProbeModeRecovery   = "cooldown_recovery"
@@ -1074,7 +1078,7 @@ func probeChannelCooldown(channelId int, modelName string, timeout time.Duration
 	if strings.TrimSpace(modelName) == "" {
 		return fmt.Errorf("probe model is empty")
 	}
-	return probeOpenAICompatibleStream(channel, modelName, timeout)
+	return probeOpenAIResponsesStream(channel, modelName, timeout)
 }
 
 func resolveCooldownProbeModel(channel *model.Channel, modelName string) string {
@@ -1091,7 +1095,7 @@ func resolveCooldownProbeMappedModel(modelName string, modelMapping string) (str
 		return modelName, nil
 	}
 	modelMap := map[string]string{}
-	if err := json.Unmarshal([]byte(modelMapping), &modelMap); err != nil {
+	if err := common.Unmarshal([]byte(modelMapping), &modelMap); err != nil {
 		return "", err
 	}
 	visited := map[string]bool{modelName: true}
@@ -1109,7 +1113,7 @@ func resolveCooldownProbeMappedModel(modelName string, modelMapping string) (str
 	}
 }
 
-func probeOpenAICompatibleStream(channel *model.Channel, modelName string, timeout time.Duration) error {
+func probeOpenAIResponsesStream(channel *model.Channel, modelName string, timeout time.Duration) error {
 	key, _, keyErr := channel.GetNextEnabledKey()
 	if keyErr != nil {
 		return keyErr
@@ -1120,19 +1124,19 @@ func probeOpenAICompatibleStream(channel *model.Channel, modelName string, timeo
 	}
 	payload := map[string]interface{}{
 		"model": modelName,
-		"messages": []map[string]string{
+		"input": []map[string]string{
 			{"role": "user", "content": "你好"},
 		},
-		"stream":     true,
-		"max_tokens": 16,
+		"stream":            true,
+		"max_output_tokens": 16,
 	}
-	body, err := json.Marshal(payload)
+	body, err := common.Marshal(payload)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/v1/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+ChannelCooldownProbeEndpoint, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -1179,7 +1183,7 @@ func probeOpenAICompatibleStream(channel *model.Channel, modelName string, timeo
 
 func cooldownProbeChunkHasContent(data []byte) bool {
 	payload := map[string]interface{}{}
-	if err := json.Unmarshal(data, &payload); err != nil {
+	if err := common.Unmarshal(data, &payload); err != nil {
 		return false
 	}
 	return cooldownProbeValueHasContent(payload)

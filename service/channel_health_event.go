@@ -107,6 +107,19 @@ func RecordChannelCooldownHealthEvent(eventType string, channelID int, channelNa
 	if channelID <= 0 || strings.TrimSpace(eventType) == "" {
 		return
 	}
+	switch eventType {
+	case ChannelHealthEventProbeWaiting,
+		ChannelHealthEventProbeScanned,
+		ChannelHealthEventProbeSkipped,
+		ChannelHealthEventProbeStarted,
+		ChannelHealthEventProbeFailed,
+		ChannelHealthEventProbeSucceeded:
+		if other == nil {
+			other = map[string]interface{}{}
+		}
+		other["probe_endpoint"] = ChannelCooldownProbeEndpoint
+		other["probe_protocol"] = ChannelCooldownProbeProtocol
+	}
 	recordChannelHealthEvent(ChannelHealthEventParams{
 		EventType:   eventType,
 		ChannelID:   channelID,

@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -770,4 +771,42 @@ func TestResolveCooldownProbeModelAlwaysUsesGPT55(t *testing.T) {
 	}
 
 	require.Equal(t, "upstream-gpt-5.5", resolveCooldownProbeModel(channel, "gpt-5.4-mini"))
+}
+
+func TestProbeOpenAIResponsesStreamUsesResponsesEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, ChannelCooldownProbeEndpoint, r.URL.Path)
+		require.Equal(t, "Bearer test-key", r.Header.Get("Authorization"))
+		require.Equal(t, "probe-value", r.Header.Get("X-Probe-Test"))
+
+		payload := map[string]interface{}{}
+		require.NoError(t, common.DecodeJson(r.Body, &payload))
+		require.Equal(t, "gpt-5.5", payload["model"])
+		require.Equal(t, true, payload["stream"])
+		require.Equal(t, float64(16), payload["max_output_tokens"])
+		require.Contains(t, payload, "input")
+		require.NotContains(t, payload, "messages")
+		require.NotContains(t, payload, "max_tokens")
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n"))
+	}))
+	defer server.Close()
+
+	baseURL := server.URL
+	headerOverride := `{"X-Probe-Test":"probe-value"}`
+	channel := &model.Channel{
+		Key:            "test-key",
+		BaseURL:        &baseURL,
+		HeaderOverride: &headerOverride,
+	}
+
+	require.NoError(t, probeOpenAIResponsesStream(channel, "gpt-5.5", time.Second))
+}
+
+func TestCooldownProbeChunkHasResponsesContent(t *testing.T) {
+	require.False(t, cooldownProbeChunkHasContent([]byte(`{"type":"response.created","response":{"id":"resp_1"}}`)))
+	require.True(t, cooldownProbeChunkHasContent([]byte(`{"type":"response.output_text.delta","delta":"ok"}`)))
 }
