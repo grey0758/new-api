@@ -428,6 +428,13 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 	if len(parts) > 1 {
 		if model.IsAdmin(token.UserId) {
 			c.Set("specific_channel_id", parts[1])
+		} else if c.Request.Method == http.MethodGet && strings.HasPrefix(c.Request.URL.Path, "/v1/responses/") {
+			// A response retrieve may use a channel-suffixed token when the
+			// response reference already binds it to this caller. The controller
+			// performs that ownership/reference check; this does not authorize
+			// arbitrary channel-pinned POST requests for ordinary users.
+			c.Set("specific_channel_id", parts[1])
+			c.Set("specific_channel_read_only", true)
 		} else {
 			c.Header("specific_channel_version", "701e3ae1dc3f7975556d354e0675168d004891c8")
 			abortWithOpenAiMessage(c, http.StatusForbidden, "普通用户不支持指定渠道")

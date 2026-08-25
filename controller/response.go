@@ -118,6 +118,12 @@ func resolveRetrieveResponseChannel(c *gin.Context, responseID string) (*model.C
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, "", err
 	}
+	if c.GetBool("specific_channel_read_only") {
+		// Ordinary users may retrieve a response only when the persisted
+		// response reference above proves ownership and channel affinity. Do
+		// not fall back to an arbitrary channel selected from the token suffix.
+		return nil, "", gorm.ErrRecordNotFound
+	}
 
 	channelIDAny, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId)
 	if !ok {
