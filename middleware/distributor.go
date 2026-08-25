@@ -55,7 +55,12 @@ func Distribute() func(c *gin.Context) {
 			// Select a channel for the user
 			// check token model mapping
 			modelLimitEnable := common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled)
-			if modelLimitEnable {
+			// Read-only resource retrieval has no model in its request body. The
+			// target controller resolves the persisted model and channel after it
+			// verifies response ownership, so applying the token model allowlist to
+			// the empty distributor model would reject a valid GET before that
+			// ownership check can run.
+			if modelLimitEnable && shouldSelectChannel {
 				s, ok := common.GetContextKey(c, constant.ContextKeyTokenModelLimit)
 				if !ok {
 					// token model limit is empty, all models are not allowed

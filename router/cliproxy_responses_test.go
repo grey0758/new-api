@@ -15,6 +15,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -28,7 +29,7 @@ func TestCLIProxyResponsesRoundTrip(t *testing.T) {
 	const (
 		userID      = 1
 		modelName   = "gpt-4o-mini"
-		tokenKey    = "admintoken1234567890"
+		tokenKey    = "ordinarytoken1234567890"
 		upstreamKey = "cliproxy-upstream-key"
 		responseID  = "resp_cli_123"
 	)
@@ -127,34 +128,76 @@ func TestCLIProxyResponsesRoundTrip(t *testing.T) {
 	if err := model.DB.Create(channel).Error; err != nil {
 		t.Fatalf("failed to create channel: %v", err)
 	}
+	priority := int64(100)
+	if err := model.DB.Create(&model.Ability{
+		Group:     "default",
+		Model:     modelName,
+		ChannelId: channel.Id,
+		Enabled:   true,
+		Priority:  &priority,
+	}).Error; err != nil {
+		t.Fatalf("failed to create channel ability: %v", err)
+	}
 
 	user := &model.User{
 		Id:       userID,
 		Username: "admin",
 		Password: "password-hash",
-		Role:     common.RoleAdminUser,
+		Role:     common.RoleCommonUser,
 		Status:   common.UserStatusEnabled,
 		Quota:    1000000,
 		Group:    "default",
+		AffCode:  "owner-aff",
 	}
 	if err := model.DB.Create(user).Error; err != nil {
 		t.Fatalf("failed to create user: %v", err)
 	}
 
 	token := &model.Token{
-		UserId:         userID,
-		Name:           "relay-token",
-		Key:            tokenKey,
-		Status:         common.TokenStatusEnabled,
-		CreatedTime:    time.Now().Unix(),
-		AccessedTime:   time.Now().Unix(),
-		ExpiredTime:    -1,
-		RemainQuota:    1000000,
-		UnlimitedQuota: true,
-		Group:          "",
+		UserId:             userID,
+		Name:               "relay-token",
+		Key:                tokenKey,
+		Status:             common.TokenStatusEnabled,
+		CreatedTime:        time.Now().Unix(),
+		AccessedTime:       time.Now().Unix(),
+		ExpiredTime:        -1,
+		RemainQuota:        1000000,
+		UnlimitedQuota:     true,
+		ModelLimitsEnabled: true,
+		ModelLimits:        modelName,
+		Group:              "",
 	}
 	if err := model.DB.Create(token).Error; err != nil {
 		t.Fatalf("failed to create token: %v", err)
+	}
+	otherUser := &model.User{
+		Id:       userID + 1,
+		Username: "other-user",
+		Password: "password-hash",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Quota:    1000000,
+		Group:    "default",
+		AffCode:  "other-aff",
+	}
+	if err := model.DB.Create(otherUser).Error; err != nil {
+		t.Fatalf("failed to create other user: %v", err)
+	}
+	otherTokenKey := "otherordinarytoken1234567890"
+	if err := model.DB.Create(&model.Token{
+		UserId:             otherUser.Id,
+		Name:               "other-relay-token",
+		Key:                otherTokenKey,
+		Status:             common.TokenStatusEnabled,
+		CreatedTime:        time.Now().Unix(),
+		AccessedTime:       time.Now().Unix(),
+		ExpiredTime:        -1,
+		RemainQuota:        1000000,
+		UnlimitedQuota:     true,
+		ModelLimitsEnabled: true,
+		ModelLimits:        modelName,
+	}).Error; err != nil {
+		t.Fatalf("failed to create other token: %v", err)
 	}
 
 	engine := gin.New()
@@ -163,7 +206,7 @@ func TestCLIProxyResponsesRoundTrip(t *testing.T) {
 	postBody := `{"model":"gpt-4o-mini","input":"say hi"}`
 	postReq := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(postBody))
 	postReq.Header.Set("Content-Type", "application/json")
-	postReq.Header.Set("Authorization", fmt.Sprintf("Bearer sk-%s-%d", tokenKey, channel.Id))
+	postReq.Header.Set("Authorization", fmt.Sprintf("Bearer sk-%s", tokenKey))
 	postRec := httptest.NewRecorder()
 	engine.ServeHTTP(postRec, postReq)
 
@@ -193,7 +236,7 @@ func TestCLIProxyResponsesRoundTrip(t *testing.T) {
 	}
 
 	getReq := httptest.NewRequest(http.MethodGet, "/v1/responses/"+responseID, nil)
-	getReq.Header.Set("Authorization", fmt.Sprintf("Bearer sk-%s-%d", tokenKey, channel.Id))
+	getReq.Header.Set("Authorization", fmt.Sprintf("Bearer sk-%s", tokenKey))
 	getRec := httptest.NewRecorder()
 	engine.ServeHTTP(getRec, getReq)
 
@@ -205,6 +248,41 @@ func TestCLIProxyResponsesRoundTrip(t *testing.T) {
 		t.Fatalf("expected GET response body to match stored upstream response\nPOST: %s\nGET: %s", postRec.Body.String(), getRec.Body.String())
 	}
 
+	getWithSuffix := httptest.NewRequest(http.MethodGet, "/v1/responses/"+responseID, nil)
+	getWithSuffix.Header.Set("Authorization", fmt.Sprintf("Bearer sk-%s-%d", tokenKey, channel.Id))
+	getWithSuffixRec := httptest.NewRecorder()
+	engine.ServeHTTP(getWithSuffixRec, getWithSuffix)
+	if getWithSuffixRec.Code != http.StatusOK {
+		t.Fatalf("expected channel-suffixed GET /v1/responses/:id to succeed, got %d: %s", getWithSuffixRec.Code, getWithSuffixRec.Body.String())
+	}
+
+	// A channel-suffixed token remains forbidden for ordinary POST requests.
+	postWithSuffix := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(postBody))
+	postWithSuffix.Header.Set("Content-Type", "application/json")
+	postWithSuffix.Header.Set("Authorization", fmt.Sprintf("Bearer sk-%s-%d", tokenKey, channel.Id))
+	postWithSuffixRec := httptest.NewRecorder()
+	engine.ServeHTTP(postWithSuffixRec, postWithSuffix)
+	if postWithSuffixRec.Code != http.StatusForbidden {
+		t.Fatalf("expected ordinary channel-suffixed POST to remain forbidden, got %d: %s", postWithSuffixRec.Code, postWithSuffixRec.Body.String())
+	}
+
+	// A missing response reference cannot fall back to the suffix-selected channel.
+	missingGet := httptest.NewRequest(http.MethodGet, "/v1/responses/resp_missing", nil)
+	missingGet.Header.Set("Authorization", fmt.Sprintf("Bearer sk-%s-%d", tokenKey, channel.Id))
+	missingGetRec := httptest.NewRecorder()
+	engine.ServeHTTP(missingGetRec, missingGet)
+	if missingGetRec.Code != http.StatusNotFound {
+		t.Fatalf("expected unreferenced suffixed GET to be not found, got %d: %s", missingGetRec.Code, missingGetRec.Body.String())
+	}
+
+	otherUserGet := httptest.NewRequest(http.MethodGet, "/v1/responses/"+responseID, nil)
+	otherUserGet.Header.Set("Authorization", fmt.Sprintf("Bearer sk-%s", otherTokenKey))
+	otherUserGetRec := httptest.NewRecorder()
+	engine.ServeHTTP(otherUserGetRec, otherUserGet)
+	if otherUserGetRec.Code != http.StatusNotFound {
+		t.Fatalf("expected another user to receive 404 for an owned response, got %d: %s", otherUserGetRec.Code, otherUserGetRec.Body.String())
+	}
+
 	upstreamMu.Lock()
 	defer upstreamMu.Unlock()
 	if lastAuthorizationHeader != "Bearer "+upstreamKey {
@@ -213,8 +291,8 @@ func TestCLIProxyResponsesRoundTrip(t *testing.T) {
 	if lastPostedModel != modelName {
 		t.Fatalf("expected upstream model %q, got %q", modelName, lastPostedModel)
 	}
-	if getRequests != 1 {
-		t.Fatalf("expected exactly one upstream GET /v1/responses/:id call, got %d", getRequests)
+	if getRequests != 2 {
+		t.Fatalf("expected exactly two upstream GET /v1/responses/:id calls, got %d", getRequests)
 	}
 	if lastRequestMethod != http.MethodGet || lastRequestPath != "/v1/responses/"+responseID {
 		t.Fatalf("expected last upstream request to be GET /v1/responses/%s, got %s %s", responseID, lastRequestMethod, lastRequestPath)
@@ -253,6 +331,9 @@ func setupRelayRouterTestDB(t *testing.T) {
 	model.LOG_DB = model.DB
 	service.InitHttpClient()
 	service.ResetProxyClientCache()
+	if err := i18n.Init(); err != nil {
+		t.Fatalf("failed to init i18n: %v", err)
+	}
 
 	t.Cleanup(func() {
 		if sqlDB, err := model.DB.DB(); err == nil {
