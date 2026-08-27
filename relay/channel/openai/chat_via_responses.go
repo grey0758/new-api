@@ -117,6 +117,7 @@ func mergeUsageFromResponses(dst *dto.Usage, src *dto.Usage) {
 	}
 	if src.InputTokensDetails != nil {
 		dst.PromptTokensDetails.CachedTokens = src.InputTokensDetails.CachedTokens
+		dst.PromptTokensDetails.CachedCreationTokens = src.InputTokensDetails.NormalizedCacheWriteTokens()
 		dst.PromptTokensDetails.ImageTokens = src.InputTokensDetails.ImageTokens
 		dst.PromptTokensDetails.AudioTokens = src.InputTokensDetails.AudioTokens
 	}
@@ -146,6 +147,9 @@ func mergeUsage(dst *dto.Usage, src *dto.Usage) {
 	}
 	if src.PromptTokensDetails.CachedTokens != 0 {
 		dst.PromptTokensDetails.CachedTokens = src.PromptTokensDetails.CachedTokens
+	}
+	if src.PromptTokensDetails.CachedCreationTokens != 0 {
+		dst.PromptTokensDetails.CachedCreationTokens = src.PromptTokensDetails.CachedCreationTokens
 	}
 	if src.PromptTokensDetails.ImageTokens != 0 {
 		dst.PromptTokensDetails.ImageTokens = src.PromptTokensDetails.ImageTokens
@@ -796,6 +800,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 					}
 					if streamResp.Response.Usage.InputTokensDetails != nil {
 						usage.PromptTokensDetails.CachedTokens = streamResp.Response.Usage.InputTokensDetails.CachedTokens
+						usage.PromptTokensDetails.CachedCreationTokens = streamResp.Response.Usage.InputTokensDetails.NormalizedCacheWriteTokens()
 						usage.PromptTokensDetails.ImageTokens = streamResp.Response.Usage.InputTokensDetails.ImageTokens
 						usage.PromptTokensDetails.AudioTokens = streamResp.Response.Usage.InputTokensDetails.AudioTokens
 					}
