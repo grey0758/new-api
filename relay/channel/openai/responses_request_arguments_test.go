@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/tidwall/gjson"
 )
 
 func TestShouldNormalizeResponsesRequestArguments(t *testing.T) {
@@ -129,6 +131,49 @@ func TestConvertOpenAIResponsesRequestPreservesClientMetadata(t *testing.T) {
 			responsesRequest.ClientMetadata,
 			clientMetadata,
 		)
+	}
+}
+
+func TestConvertOpenAIResponsesRequestPreservesBackground(t *testing.T) {
+	adaptor := &Adaptor{}
+	var request dto.OpenAIResponsesRequest
+	if err := common.Unmarshal(
+		[]byte(`{"model":"gpt-5.6-sol","input":"test","background":true}`),
+		&request,
+	); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+
+	converted, err := adaptor.ConvertOpenAIResponsesRequest(
+		nil,
+		&relaycommon.RelayInfo{
+			UsingGroup: "codex-us003-test",
+			ChannelMeta: &relaycommon.ChannelMeta{
+				ChannelId:      70,
+				ChannelBaseUrl: "http://10.253.0.1:18787/outer-tools",
+			},
+		},
+		request,
+	)
+	if err != nil {
+		t.Fatalf("ConvertOpenAIResponsesRequest() error = %v", err)
+	}
+
+	responsesRequest, ok := converted.(dto.OpenAIResponsesRequest)
+	if !ok {
+		t.Fatalf("converted type = %T, want dto.OpenAIResponsesRequest", converted)
+	}
+	if responsesRequest.Background == nil || !*responsesRequest.Background {
+		t.Fatalf("background = %v, want true", responsesRequest.Background)
+	}
+
+	encoded, err := common.Marshal(responsesRequest)
+	if err != nil {
+		t.Fatalf("marshal converted request: %v", err)
+	}
+	background := gjson.GetBytes(encoded, "background")
+	if !background.Exists() || !background.Bool() {
+		t.Fatalf("upstream background = %s, want true", background.Raw)
 	}
 }
 

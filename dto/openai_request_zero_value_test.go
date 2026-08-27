@@ -53,6 +53,7 @@ func TestGeneralOpenAIRequestPreserveExplicitZeroValues(t *testing.T) {
 func TestOpenAIResponsesRequestPreserveExplicitZeroValues(t *testing.T) {
 	raw := []byte(`{
 		"model":"gpt-4.1",
+		"background":false,
 		"max_output_tokens":0,
 		"max_tool_calls":0,
 		"stream":false,
@@ -66,10 +67,40 @@ func TestOpenAIResponsesRequestPreserveExplicitZeroValues(t *testing.T) {
 	encoded, err := common.Marshal(req)
 	require.NoError(t, err)
 
+	require.True(t, gjson.GetBytes(encoded, "background").Exists())
+	require.False(t, gjson.GetBytes(encoded, "background").Bool())
 	require.True(t, gjson.GetBytes(encoded, "max_output_tokens").Exists())
 	require.True(t, gjson.GetBytes(encoded, "max_tool_calls").Exists())
 	require.True(t, gjson.GetBytes(encoded, "stream").Exists())
 	require.True(t, gjson.GetBytes(encoded, "top_p").Exists())
+}
+
+func TestOpenAIResponsesRequestBackgroundThreeState(t *testing.T) {
+	tests := []struct {
+		name       string
+		raw        string
+		wantExists bool
+		wantValue  bool
+	}{
+		{name: "absent", raw: `{"model":"gpt-4.1"}`, wantExists: false},
+		{name: "false", raw: `{"model":"gpt-4.1","background":false}`, wantExists: true, wantValue: false},
+		{name: "true", raw: `{"model":"gpt-4.1","background":true}`, wantExists: true, wantValue: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var req OpenAIResponsesRequest
+			require.NoError(t, common.Unmarshal([]byte(tt.raw), &req))
+
+			encoded, err := common.Marshal(req)
+			require.NoError(t, err)
+			background := gjson.GetBytes(encoded, "background")
+			require.Equal(t, tt.wantExists, background.Exists())
+			if tt.wantExists {
+				require.Equal(t, tt.wantValue, background.Bool())
+			}
+		})
+	}
 }
 
 func TestOpenAIResponsesRequestPreservesClientMetadata(t *testing.T) {
