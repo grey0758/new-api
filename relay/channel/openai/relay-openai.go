@@ -585,6 +585,12 @@ func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 		usageResp.CompletionTokens += usageResp.OutputTokens
 	}
 	if usageResp.InputTokensDetails != nil {
+		if usageResp.PromptTokensDetails.CachedTokens == 0 {
+			usageResp.PromptTokensDetails.CachedTokens = usageResp.InputTokensDetails.CachedTokens
+		}
+		if usageResp.PromptTokensDetails.CachedCreationTokens == 0 {
+			usageResp.PromptTokensDetails.CachedCreationTokens = usageResp.InputTokensDetails.NormalizedCacheWriteTokens()
+		}
 		usageResp.PromptTokensDetails.ImageTokens += usageResp.InputTokensDetails.ImageTokens
 		usageResp.PromptTokensDetails.TextTokens += usageResp.InputTokensDetails.TextTokens
 	}
