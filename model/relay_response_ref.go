@@ -55,3 +55,15 @@ func GetRelayResponseRefByResponseID(responseID string) (*RelayResponseRef, erro
 	}
 	return &ref, nil
 }
+
+func DeleteRelayResponseRefByResponseID(responseID string, userID int) error {
+	responseID = strings.TrimSpace(responseID)
+	if responseID == "" || userID <= 0 {
+		return nil
+	}
+	return DB.Where(
+		"response_id = ? AND (user_id = ? OR user_id = 0)",
+		responseID,
+		userID,
+	).Delete(&RelayResponseRef{}).Error
+}

@@ -24,27 +24,35 @@ import (
 )
 
 func RetrieveResponse(c *gin.Context) {
+	RelayResponseResource(c)
+}
+
+// RelayResponseResource proxies an existing Responses resource back to the
+// exact channel that created it. The persisted response reference is both an
+// ownership boundary and the channel-affinity source; resource operations
+// never fall back to a newly distributed channel.
+func RelayResponseResource(c *gin.Context) {
 	responseID := strings.TrimSpace(c.Param("response_id"))
 	if responseID == "" {
-		writeRetrieveResponseError(c, http.StatusBadRequest, "response_id is required")
+		writeResponseResourceError(c, http.StatusBadRequest, "response_id is required")
 		return
 	}
 
 	channel, modelName, err := resolveRetrieveResponseChannel(c, responseID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			writeRetrieveResponseError(c, http.StatusNotFound, "response not found")
+			writeResponseResourceError(c, http.StatusNotFound, "response not found")
 			return
 		}
-		writeRetrieveResponseError(c, http.StatusBadRequest, err.Error())
+		writeResponseResourceError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	if channel == nil {
-		writeRetrieveResponseError(c, http.StatusNotFound, "response not found")
+		writeResponseResourceError(c, http.StatusNotFound, "response not found")
 		return
 	}
 	if channel.Status != common.ChannelStatusEnabled {
-		writeRetrieveResponseError(c, http.StatusForbidden, "channel is disabled")
+		writeResponseResourceError(c, http.StatusForbidden, "channel is disabled")
 		return
 	}
 
@@ -61,23 +69,23 @@ func RetrieveResponse(c *gin.Context) {
 
 	adaptor := relay.GetAdaptor(info.ApiType)
 	if adaptor == nil {
-		writeRetrieveResponseError(c, http.StatusBadGateway, fmt.Sprintf("invalid api type: %d", info.ApiType))
+		writeResponseResourceError(c, http.StatusBadGateway, fmt.Sprintf("invalid api type: %d", info.ApiType))
 		return
 	}
 	adaptor.Init(info)
 
-	respAny, err := adaptor.DoRequest(c, info, nil)
+	respAny, err := adaptor.DoRequest(c, info, c.Request.Body)
 	if err != nil {
-		writeRetrieveResponseError(c, http.StatusBadGateway, err.Error())
+		writeResponseResourceError(c, http.StatusBadGateway, err.Error())
 		return
 	}
 	resp, ok := respAny.(*http.Response)
 	if !ok {
-		writeRetrieveResponseError(c, http.StatusBadGateway, "invalid upstream response type")
+		writeResponseResourceError(c, http.StatusBadGateway, "invalid upstream response type")
 		return
 	}
 	if resp == nil {
-		writeRetrieveResponseError(c, http.StatusBadGateway, "empty upstream response")
+		writeResponseResourceError(c, http.StatusBadGateway, "empty upstream response")
 		return
 	}
 	defer service.CloseResponseBodyGracefully(resp)
@@ -90,8 +98,13 @@ func RetrieveResponse(c *gin.Context) {
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		writeRetrieveResponseError(c, http.StatusBadGateway, err.Error())
+		writeResponseResourceError(c, http.StatusBadGateway, err.Error())
 		return
+	}
+	if c.Request.Method == http.MethodDelete {
+		if deleteErr := model.DeleteRelayResponseRefByResponseID(responseID, c.GetInt("id")); deleteErr != nil {
+			common.SysError(fmt.Sprintf("failed to delete relay response ref %q: %v", responseID, deleteErr))
+		}
 	}
 	service.IOCopyBytesGracefully(c, resp, body)
 }
@@ -140,7 +153,7 @@ func resolveRetrieveResponseChannel(c *gin.Context, responseID string) (*model.C
 	return ch, "", nil
 }
 
-func writeRetrieveResponseError(c *gin.Context, statusCode int, message string) {
+func writeResponseResourceError(c *gin.Context, statusCode int, message string) {
 	err := types.NewErrorWithStatusCode(errors.New(message), types.ErrorCodeInvalidRequest, statusCode, types.ErrOptionWithSkipRetry())
 	c.JSON(statusCode, gin.H{"error": err.ToOpenAIError()})
 }

@@ -331,7 +331,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			modelRequest.Model = modelName
 		}
 		c.Set("relay_mode", relayMode)
-	} else if c.Request.Method == http.MethodGet && strings.HasPrefix(c.Request.URL.Path, "/v1/responses/") {
+	} else if isResponsesResourceRequest(c.Request.Method, c.Request.URL.Path) {
 		shouldSelectChannel = false
 	} else if !strings.HasPrefix(c.Request.URL.Path, "/v1/audio/transcriptions") && !strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
 		req, err := getModelFromRequest(c)
@@ -403,6 +403,20 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		modelRequest.Model = ratio_setting.WithCompactModelSuffix(modelRequest.Model)
 	}
 	return &modelRequest, shouldSelectChannel, nil
+}
+
+func isResponsesResourceRequest(method string, path string) bool {
+	if !strings.HasPrefix(path, "/v1/responses/") || path == "/v1/responses/compact" {
+		return false
+	}
+	switch method {
+	case http.MethodGet, http.MethodDelete:
+		return true
+	case http.MethodPost:
+		return strings.HasSuffix(path, "/cancel")
+	default:
+		return false
+	}
 }
 
 func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string) *types.NewAPIError {

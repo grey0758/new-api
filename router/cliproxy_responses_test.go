@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -40,8 +41,11 @@ func TestCLIProxyResponsesRoundTrip(t *testing.T) {
 		lastAuthorizationHeader string
 		lastRequestMethod       string
 		lastRequestPath         string
+		lastRequestQuery        string
 		lastPostedModel         string
 		getRequests             int
+		resourceRequests        []string
+		cancelRequestBody       string
 	)
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -49,6 +53,7 @@ func TestCLIProxyResponsesRoundTrip(t *testing.T) {
 		lastAuthorizationHeader = r.Header.Get("Authorization")
 		lastRequestMethod = r.Method
 		lastRequestPath = r.URL.Path
+		lastRequestQuery = r.URL.RawQuery
 		upstreamMu.Unlock()
 
 		w.Header().Set("Content-Type", "application/json")
@@ -109,6 +114,60 @@ func TestCLIProxyResponsesRoundTrip(t *testing.T) {
 				return
 			}
 			_ = json.NewEncoder(w).Encode(payload)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/responses/"+responseID+"/input_items":
+			upstreamMu.Lock()
+			resourceRequests = append(resourceRequests, r.Method+" "+r.URL.RequestURI())
+			upstreamMu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"object":   "list",
+				"data":     []map[string]any{{"id": "item_cli_123", "type": "message", "role": "user"}},
+				"has_more": false,
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/responses/"+responseID+"/events":
+			upstreamMu.Lock()
+			resourceRequests = append(resourceRequests, r.Method+" "+r.URL.RequestURI())
+			upstreamMu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"object":   "list",
+				"data":     []map[string]any{{"type": "response.completed", "sequence_number": 3}},
+				"has_more": false,
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/responses/"+responseID+"/cancel":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			upstreamMu.Lock()
+			resourceRequests = append(resourceRequests, r.Method+" "+r.URL.RequestURI())
+			cancelRequestBody = string(body)
+			payload := upstreamResponses[responseID]
+			upstreamMu.Unlock()
+			if payload == nil {
+				http.Error(w, `{"error":{"message":"not found","type":"invalid_request_error"}}`, http.StatusNotFound)
+				return
+			}
+			cancelled := make(map[string]any, len(payload))
+			for key, value := range payload {
+				cancelled[key] = value
+			}
+			cancelled["status"] = "cancelled"
+			_ = json.NewEncoder(w).Encode(cancelled)
+		case r.Method == http.MethodDelete && r.URL.Path == "/v1/responses/"+responseID:
+			upstreamMu.Lock()
+			resourceRequests = append(resourceRequests, r.Method+" "+r.URL.RequestURI())
+			_, ok := upstreamResponses[responseID]
+			if ok {
+				delete(upstreamResponses, responseID)
+			}
+			upstreamMu.Unlock()
+			if !ok {
+				http.Error(w, `{"error":{"message":"not found","type":"invalid_request_error"}}`, http.StatusNotFound)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": responseID, "object": "response.deleted", "deleted": true,
+			})
 		default:
 			http.Error(w, fmt.Sprintf(`{"error":{"message":"unexpected upstream route %s %s","type":"invalid_request_error"}}`, r.Method, r.URL.Path), http.StatusNotFound)
 		}
@@ -283,6 +342,87 @@ func TestCLIProxyResponsesRoundTrip(t *testing.T) {
 		t.Fatalf("expected another user to receive 404 for an owned response, got %d: %s", otherUserGetRec.Code, otherUserGetRec.Body.String())
 	}
 
+	resourceCases := []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodGet, path: "/v1/responses/" + responseID + "/input_items?limit=2&order=asc"},
+		{method: http.MethodGet, path: "/v1/responses/" + responseID + "/events?starting_after=1"},
+		{method: http.MethodPost, path: "/v1/responses/" + responseID + "/cancel"},
+		{method: http.MethodDelete, path: "/v1/responses/" + responseID},
+	}
+	for _, testCase := range resourceCases {
+		otherReq := httptest.NewRequest(testCase.method, testCase.path, nil)
+		otherReq.Header.Set("Authorization", fmt.Sprintf("Bearer sk-%s", otherTokenKey))
+		otherRec := httptest.NewRecorder()
+		engine.ServeHTTP(otherRec, otherReq)
+		if otherRec.Code != http.StatusNotFound {
+			t.Fatalf("expected another user to receive 404 for %s %s, got %d: %s", testCase.method, testCase.path, otherRec.Code, otherRec.Body.String())
+		}
+
+		missingPath := strings.Replace(testCase.path, responseID, "resp_missing_resource", 1)
+		missingReq := httptest.NewRequest(testCase.method, missingPath, nil)
+		missingReq.Header.Set("Authorization", fmt.Sprintf("Bearer sk-%s", tokenKey))
+		missingRec := httptest.NewRecorder()
+		engine.ServeHTTP(missingRec, missingReq)
+		if missingRec.Code != http.StatusNotFound {
+			t.Fatalf("expected a missing response to receive 404 for %s %s, got %d: %s", testCase.method, missingPath, missingRec.Code, missingRec.Body.String())
+		}
+	}
+
+	inputItemsReq := httptest.NewRequest(
+		http.MethodGet,
+		"/v1/responses/"+responseID+"/input_items?limit=2&order=asc",
+		nil,
+	)
+	inputItemsReq.Header.Set("Authorization", fmt.Sprintf("Bearer sk-%s", tokenKey))
+	inputItemsRec := httptest.NewRecorder()
+	engine.ServeHTTP(inputItemsRec, inputItemsReq)
+	if inputItemsRec.Code != http.StatusOK || !strings.Contains(inputItemsRec.Body.String(), "item_cli_123") {
+		t.Fatalf("expected input_items to pass through, got %d: %s", inputItemsRec.Code, inputItemsRec.Body.String())
+	}
+
+	eventsReq := httptest.NewRequest(
+		http.MethodGet,
+		"/v1/responses/"+responseID+"/events?starting_after=1",
+		nil,
+	)
+	eventsReq.Header.Set("Authorization", fmt.Sprintf("Bearer sk-%s", tokenKey))
+	eventsRec := httptest.NewRecorder()
+	engine.ServeHTTP(eventsRec, eventsReq)
+	if eventsRec.Code != http.StatusOK || !strings.Contains(eventsRec.Body.String(), "response.completed") {
+		t.Fatalf("expected events to pass through, got %d: %s", eventsRec.Code, eventsRec.Body.String())
+	}
+
+	cancelBody := `{"reason":"caller_requested"}`
+	cancelReq := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/responses/"+responseID+"/cancel",
+		strings.NewReader(cancelBody),
+	)
+	cancelReq.Header.Set("Content-Type", "application/json")
+	cancelReq.Header.Set("Authorization", fmt.Sprintf("Bearer sk-%s", tokenKey))
+	cancelRec := httptest.NewRecorder()
+	engine.ServeHTTP(cancelRec, cancelReq)
+	if cancelRec.Code != http.StatusOK || !strings.Contains(cancelRec.Body.String(), `"status":"cancelled"`) {
+		t.Fatalf("expected cancel to pass through, got %d: %s", cancelRec.Code, cancelRec.Body.String())
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/v1/responses/"+responseID, nil)
+	deleteReq.Header.Set("Authorization", fmt.Sprintf("Bearer sk-%s", tokenKey))
+	deleteRec := httptest.NewRecorder()
+	engine.ServeHTTP(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusOK || !strings.Contains(deleteRec.Body.String(), `"deleted":true`) {
+		t.Fatalf("expected DELETE response to pass through, got %d: %s", deleteRec.Code, deleteRec.Body.String())
+	}
+	var remainingRefs int64
+	if err := model.DB.Model(&model.RelayResponseRef{}).Where("response_id = ?", responseID).Count(&remainingRefs).Error; err != nil {
+		t.Fatalf("failed to count response refs after delete: %v", err)
+	}
+	if remainingRefs != 0 {
+		t.Fatalf("expected successful DELETE to remove the response ref, got %d", remainingRefs)
+	}
+
 	upstreamMu.Lock()
 	defer upstreamMu.Unlock()
 	if lastAuthorizationHeader != "Bearer "+upstreamKey {
@@ -294,8 +434,20 @@ func TestCLIProxyResponsesRoundTrip(t *testing.T) {
 	if getRequests != 2 {
 		t.Fatalf("expected exactly two upstream GET /v1/responses/:id calls, got %d", getRequests)
 	}
-	if lastRequestMethod != http.MethodGet || lastRequestPath != "/v1/responses/"+responseID {
-		t.Fatalf("expected last upstream request to be GET /v1/responses/%s, got %s %s", responseID, lastRequestMethod, lastRequestPath)
+	if lastRequestMethod != http.MethodDelete || lastRequestPath != "/v1/responses/"+responseID || lastRequestQuery != "" {
+		t.Fatalf("expected last upstream request to be DELETE /v1/responses/%s, got %s %s?%s", responseID, lastRequestMethod, lastRequestPath, lastRequestQuery)
+	}
+	wantResourceRequests := []string{
+		"GET /v1/responses/" + responseID + "/input_items?limit=2&order=asc",
+		"GET /v1/responses/" + responseID + "/events?starting_after=1",
+		"POST /v1/responses/" + responseID + "/cancel",
+		"DELETE /v1/responses/" + responseID,
+	}
+	if fmt.Sprint(resourceRequests) != fmt.Sprint(wantResourceRequests) {
+		t.Fatalf("unexpected upstream resource requests: got %v want %v", resourceRequests, wantResourceRequests)
+	}
+	if cancelRequestBody != cancelBody {
+		t.Fatalf("expected cancel body %q, got %q", cancelBody, cancelRequestBody)
 	}
 }
 

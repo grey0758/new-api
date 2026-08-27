@@ -110,7 +110,11 @@ func SetRelayRouter(router *gin.Engine) {
 		httpRouter.POST("/responses", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatOpenAIResponses)
 		})
-		httpRouter.GET("/responses/:response_id", controller.RetrieveResponse)
+		httpRouter.GET("/responses/:response_id", controller.RelayResponseResource)
+		httpRouter.GET("/responses/:response_id/input_items", controller.RelayResponseResource)
+		httpRouter.GET("/responses/:response_id/events", controller.RelayResponseResource)
+		httpRouter.POST("/responses/:response_id/cancel", controller.RelayResponseResource)
+		httpRouter.DELETE("/responses/:response_id", controller.RelayResponseResource)
 		httpRouter.POST("/responses/compact", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatOpenAIResponsesCompaction)
 		})
