@@ -2,17 +2,36 @@ package helper
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
+
+func resolvePricingModelName(c *gin.Context, info *relaycommon.RelayInfo) (string, error) {
+	pricingModelName := info.OriginModelName
+	if info.RelayMode == relayconstant.RelayModeResponsesCompact &&
+		strings.HasSuffix(pricingModelName, ratio_setting.CompactModelSuffix) {
+		pricingModelName = strings.TrimSuffix(pricingModelName, ratio_setting.CompactModelSuffix)
+	}
+
+	mappedModelName, isMapped, err := ResolveMappedModelName(pricingModelName, c.GetString("model_mapping"))
+	if err != nil {
+		return "", err
+	}
+	if isMapped {
+		pricingModelName = mappedModelName
+	}
+	return pricingModelName, nil
+}
 
 func modelPriceNotConfiguredError(modelName string, userId int) error {
 	if model.IsAdmin(userId) {
@@ -62,11 +81,9 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.
 }
 
 func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (types.PriceData, error) {
-	pricingModelName := info.OriginModelName
-	if mappedModelName, isMapped, err := ResolveMappedModelName(info.OriginModelName, c.GetString("model_mapping")); err != nil {
+	pricingModelName, err := resolvePricingModelName(c, info)
+	if err != nil {
 		return types.PriceData{}, err
-	} else if isMapped {
-		pricingModelName = mappedModelName
 	}
 
 	modelPrice, usePrice := ratio_setting.GetModelPrice(pricingModelName, false)
