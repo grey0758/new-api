@@ -71,3 +71,31 @@ func TestOpenAIResponsesRequestPreserveExplicitZeroValues(t *testing.T) {
 	require.True(t, gjson.GetBytes(encoded, "stream").Exists())
 	require.True(t, gjson.GetBytes(encoded, "top_p").Exists())
 }
+
+func TestOpenAIResponsesRequestPreservesClientMetadata(t *testing.T) {
+	raw := []byte(`{
+		"model":"gpt-5.6-sol",
+		"input":[{"type":"compaction_trigger"}],
+		"client_metadata":{
+			"x-codex-turn-metadata":"{\"request_kind\":\"compaction\",\"compaction\":{\"implementation\":\"responses_compaction_v2\"}}"
+		}
+	}`)
+
+	var req OpenAIResponsesRequest
+	err := common.Unmarshal(raw, &req)
+	require.NoError(t, err)
+	require.NotEmpty(t, req.ClientMetadata)
+
+	encoded, err := common.Marshal(req)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		"compaction",
+		gjson.GetBytes(encoded, "client_metadata.x-codex-turn-metadata|@fromstr|request_kind").String(),
+	)
+	require.Equal(
+		t,
+		"responses_compaction_v2",
+		gjson.GetBytes(encoded, "client_metadata.x-codex-turn-metadata|@fromstr|compaction.implementation").String(),
+	)
+}

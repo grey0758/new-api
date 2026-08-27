@@ -93,6 +93,45 @@ func TestShouldNormalizeResponsesRequestArguments(t *testing.T) {
 	}
 }
 
+func TestConvertOpenAIResponsesRequestPreservesClientMetadata(t *testing.T) {
+	adaptor := &Adaptor{}
+	clientMetadata := json.RawMessage(`{
+		"x-codex-turn-metadata":"{\"request_kind\":\"compaction\",\"compaction\":{\"implementation\":\"responses_compaction_v2\"}}"
+	}`)
+	request := dto.OpenAIResponsesRequest{
+		Model:          "gpt-5.6-sol",
+		Input:          json.RawMessage(`[{"type":"compaction_trigger"}]`),
+		ClientMetadata: clientMetadata,
+	}
+
+	converted, err := adaptor.ConvertOpenAIResponsesRequest(
+		nil,
+		&relaycommon.RelayInfo{
+			UsingGroup: "codex-us003-test",
+			ChannelMeta: &relaycommon.ChannelMeta{
+				ChannelId:      70,
+				ChannelBaseUrl: "http://10.253.0.1:18787/outer-tools",
+			},
+		},
+		request,
+	)
+	if err != nil {
+		t.Fatalf("ConvertOpenAIResponsesRequest() error = %v", err)
+	}
+
+	responsesRequest, ok := converted.(dto.OpenAIResponsesRequest)
+	if !ok {
+		t.Fatalf("converted type = %T, want dto.OpenAIResponsesRequest", converted)
+	}
+	if string(responsesRequest.ClientMetadata) != string(clientMetadata) {
+		t.Fatalf(
+			"client_metadata = %s, want %s",
+			responsesRequest.ClientMetadata,
+			clientMetadata,
+		)
+	}
+}
+
 func TestConvertOpenAIResponsesRequestNormalizesCompatibleUpstreamArguments(t *testing.T) {
 	adaptor := &Adaptor{}
 	info := &relaycommon.RelayInfo{UsingGroup: "pro", ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 47, ChannelBaseUrl: "https://api.krill-ai.com/codex"}}

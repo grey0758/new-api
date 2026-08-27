@@ -842,6 +842,7 @@ type OpenAIResponsesRequest struct {
 	// Background         json.RawMessage `json:"background,omitempty"`
 	Conversation       json.RawMessage `json:"conversation,omitempty"`
 	ContextManagement  json.RawMessage `json:"context_management,omitempty"`
+	ClientMetadata     json.RawMessage `json:"client_metadata,omitempty"`
 	Instructions       json.RawMessage `json:"instructions,omitempty"`
 	MaxOutputTokens    *uint           `json:"max_output_tokens,omitempty"`
 	TopLogProbs        *int            `json:"top_logprobs,omitempty"`
