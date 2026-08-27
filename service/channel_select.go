@@ -17,6 +17,7 @@ type RetryParam struct {
 	ModelName          string
 	Retry              *int
 	ExcludedChannelIds map[int]bool
+	ChannelFilter      func(*model.Channel) bool
 	resetNextTry       bool
 }
 
@@ -188,7 +189,13 @@ func getRandomSatisfiedChannelSkippingCooldown(param *RetryParam, group string, 
 			return channel, err
 		}
 		if !IsChannelCoolingDown(channel.Id) {
-			return channel, nil
+			if param.ChannelFilter == nil || param.ChannelFilter(channel) {
+				return channel, nil
+			}
+			logger.LogDebug(param.Ctx, "Skipping channel #%d because it does not satisfy the request capability filter", channel.Id)
+			param.ExcludeChannel(channel.Id)
+			retry = 0
+			continue
 		}
 		logger.LogDebug(param.Ctx, "Skipping cooling channel #%d for group %s, model %s", channel.Id, group, param.ModelName)
 		param.ExcludeChannel(channel.Id)

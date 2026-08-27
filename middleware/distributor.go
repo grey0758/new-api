@@ -72,7 +72,7 @@ func Distribute() func(c *gin.Context) {
 				if !ok {
 					tokenModelLimit = map[string]bool{}
 				}
-				matchName := ratio_setting.FormatMatchingModelName(modelRequest.Model) // match gpts & thinking-*
+				matchName := requestModelLimitMatchName(c.Request.URL.Path, modelRequest.Model)
 				if _, ok := tokenModelLimit[matchName]; !ok {
 					abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorTokenModelForbidden, map[string]any{"Model": modelRequest.Model}))
 					return
@@ -117,7 +117,7 @@ func Distribute() func(c *gin.Context) {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 							autoGroups := service.GetUserAutoGroup(userGroup)
 							for _, g := range autoGroups {
-								if model.IsChannelEnabledForGroupModel(g, modelRequest.Model, preferred.Id) {
+								if isChannelEnabledForRequestModel(c.Request.URL.Path, g, modelRequest.Model, preferred) {
 									selectGroup = g
 									common.SetContextKey(c, constant.ContextKeyAutoGroup, g)
 									channel = preferred
@@ -128,7 +128,7 @@ func Distribute() func(c *gin.Context) {
 							if channel == nil {
 								service.ClearCurrentChannelAffinity(c)
 							}
-						} else if model.IsChannelEnabledForGroupModel(usingGroup, modelRequest.Model, preferred.Id) {
+						} else if isChannelEnabledForRequestModel(c.Request.URL.Path, usingGroup, modelRequest.Model, preferred) {
 							channel = preferred
 							selectGroup = usingGroup
 							service.MarkChannelAffinityUsed(c, usingGroup, preferred.Id)
@@ -141,13 +141,28 @@ func Distribute() func(c *gin.Context) {
 				}
 
 				if channel == nil {
+					excludedChannelIds := service.GetResponsesStreamFailoverExcludedChannels(c, modelRequest.Model)
 					channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
 						Ctx:                c,
 						ModelName:          modelRequest.Model,
 						TokenGroup:         usingGroup,
 						Retry:              common.GetPointer(0),
-						ExcludedChannelIds: service.GetResponsesStreamFailoverExcludedChannels(c, modelRequest.Model),
+						ExcludedChannelIds: excludedChannelIds,
 					})
+					if err == nil && channel == nil {
+						if baseModel, compact := responsesCompactBaseModel(c.Request.URL.Path, modelRequest.Model); compact {
+							fallback := &service.RetryParam{
+								Ctx:                c,
+								ModelName:          baseModel,
+								TokenGroup:         usingGroup,
+								Retry:              common.GetPointer(0),
+								ExcludedChannelIds: excludedChannelIds,
+								ChannelFilter:      channelAllowsResponsesCompactBaseModelFallback,
+							}
+							fallback.ResetSelectionCycle()
+							channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(fallback)
+						}
+					}
 					if err != nil {
 						showGroup := usingGroup
 						if usingGroup == "auto" {
@@ -190,6 +205,38 @@ func getModelFromRequest(c *gin.Context) (*ModelRequest, error) {
 		return nil, errors.New(i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
 	}
 	return &modelRequest, nil
+}
+
+func responsesCompactBaseModel(path string, modelName string) (string, bool) {
+	if !strings.HasPrefix(path, "/v1/responses/compact") || !strings.HasSuffix(modelName, ratio_setting.CompactModelSuffix) {
+		return "", false
+	}
+	baseModel := strings.TrimSuffix(modelName, ratio_setting.CompactModelSuffix)
+	return baseModel, baseModel != ""
+}
+
+func requestModelLimitMatchName(path string, modelName string) string {
+	if baseModel, compact := responsesCompactBaseModel(path, modelName); compact {
+		modelName = baseModel
+	}
+	return ratio_setting.FormatMatchingModelName(modelName)
+}
+
+func channelAllowsResponsesCompactBaseModelFallback(channel *model.Channel) bool {
+	return channel != nil && channel.GetOtherSettings().ResponsesCompactBaseModelFallback
+}
+
+func isChannelEnabledForRequestModel(path string, group string, modelName string, channel *model.Channel) bool {
+	if channel == nil {
+		return false
+	}
+	if model.IsChannelEnabledForGroupModel(group, modelName, channel.Id) {
+		return true
+	}
+	baseModel, compact := responsesCompactBaseModel(path, modelName)
+	return compact &&
+		channelAllowsResponsesCompactBaseModelFallback(channel) &&
+		model.IsChannelEnabledForGroupModel(group, baseModel, channel.Id)
 }
 
 func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {

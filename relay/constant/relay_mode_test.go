@@ -26,3 +26,9 @@ func TestPath2RelayModeSupportsGeminiCompatAlias(t *testing.T) {
 		t.Fatalf("Path2RelayMode returned %d, want %d", got, RelayModeGemini)
 	}
 }
+
+func TestPath2RelayModeSupportsStandaloneWebSearch(t *testing.T) {
+	if got := Path2RelayMode("/v1/alpha/search"); got != RelayModeWebSearch {
+		t.Fatalf("Path2RelayMode returned %d, want %d", got, RelayModeWebSearch)
+	}
+}

@@ -48,6 +48,8 @@ func relayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIErro
 		err = relay.EmbeddingHelper(c, info)
 	case relayconstant.RelayModeResponses, relayconstant.RelayModeResponsesCompact:
 		err = relay.ResponsesHelper(c, info)
+	case relayconstant.RelayModeWebSearch:
+		err = relay.WebSearchHelper(c, info)
 	default:
 		err = relay.TextHelper(c, info)
 	}

@@ -104,6 +104,9 @@ func SetRelayRouter(router *gin.Engine) {
 		})
 
 		// response related routes
+		httpRouter.POST("/alpha/search", func(c *gin.Context) {
+			controller.Relay(c, types.RelayFormatOpenAIWebSearch)
+		})
 		httpRouter.POST("/responses", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatOpenAIResponses)
 		})
