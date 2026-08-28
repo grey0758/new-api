@@ -79,11 +79,17 @@ func SetRelayRouter(router *gin.Engine) {
 	}
 	{
 		// WebSocket 路由（统一到 Relay）
-		wsRouter := relayV1Router.Group("")
-		wsRouter.Use(middleware.Distribute())
-		wsRouter.GET("/realtime", func(c *gin.Context) {
+		realtimeRouter := relayV1Router.Group("")
+		realtimeRouter.Use(middleware.Distribute())
+		realtimeRouter.GET("/realtime", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatOpenAIRealtime)
 		})
+		// Responses WebSocket carries its model in the first response.create
+		// frame, so it cannot use the ordinary body-based Distribute middleware.
+		// RelayResponsesWebSocket authenticates first, reads that frame, fixes the
+		// channel for the connection, then proxies all subsequent frames.
+		responsesWebSocketRouter := relayV1Router.Group("")
+		responsesWebSocketRouter.GET("/responses", controller.RelayResponsesWebSocket)
 	}
 	{
 		//http router
