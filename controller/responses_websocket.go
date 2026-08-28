@@ -426,7 +426,7 @@ func intFromAny(value any) int {
 
 func responsesWebSocketTerminal(eventType string) bool {
 	switch eventType {
-	case "response.completed", "response.failed", "response.incomplete", "response.cancelled":
+	case "response.completed", "response.failed", "response.incomplete", "response.cancelled", "error":
 		return true
 	default:
 		return false

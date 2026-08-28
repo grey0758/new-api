@@ -98,6 +98,12 @@ func TestResponsesWebSocketUsageRejectsEmptyUsage(t *testing.T) {
 	require.Nil(t, usage)
 }
 
+func TestResponsesWebSocketRequestErrorsAreTerminalForRefund(t *testing.T) {
+	require.True(t, responsesWebSocketTerminal("error"))
+	require.True(t, responsesWebSocketTerminal("response.failed"))
+	require.False(t, responsesWebSocketTerminal("response.output_text.delta"))
+}
+
 func TestResponsesWebSocketDialerCopiesGlobalDefaults(t *testing.T) {
 	originalTimeout := websocket.DefaultDialer.HandshakeTimeout
 	t.Cleanup(func() { websocket.DefaultDialer.HandshakeTimeout = originalTimeout })
