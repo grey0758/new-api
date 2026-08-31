@@ -66,6 +66,30 @@ func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewA
 	return err
 }
 
+const responsesCompactMaxRequestBodyBytes int64 = 960_000
+
+// rejectOversizedResponsesCompaction prevents large compact requests from
+// entering token estimation or channel processing.  The bridge applies the
+// same limit, but this early guard keeps malformed/extreme bodies from
+// consuming NewAPI CPU or waiting for an upstream timeout first.
+func rejectOversizedResponsesCompaction(c *gin.Context, relayFormat types.RelayFormat) *types.NewAPIError {
+	if relayFormat != types.RelayFormatOpenAIResponsesCompaction || c == nil || c.Request == nil {
+		return nil
+	}
+	if c.Request.ContentLength > responsesCompactMaxRequestBodyBytes {
+		return types.NewErrorWithStatusCode(
+			fmt.Errorf("responses compaction request body exceeds %d bytes", responsesCompactMaxRequestBodyBytes),
+			types.ErrorCodeReadRequestBodyFailed,
+			http.StatusRequestEntityTooLarge,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+	if c.Request.Body != nil {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, responsesCompactMaxRequestBodyBytes)
+	}
+	return nil
+}
+
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	requestId := c.GetString(common.RequestIdKey)
@@ -108,6 +132,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			}
 		}
 	}()
+
+	if newAPIError = rejectOversizedResponsesCompaction(c, relayFormat); newAPIError != nil {
+		return
+	}
 
 	request, err := helper.GetAndValidateRequest(c, relayFormat)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -33,6 +34,24 @@ func TestRelaySkipRetryErrorReturnsDirectly(t *testing.T) {
 	err := types.NewErrorWithStatusCode(errors.New("bad request"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 
 	require.False(t, shouldRetry(c, err, 1, 7))
+}
+
+func TestRejectOversizedResponsesCompactionBeforeBodyRead(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/responses/compact",
+		strings.NewReader(`{"model":"gpt-5.6-sol","input":"small"}`),
+	)
+	c.Request.ContentLength = responsesCompactMaxRequestBodyBytes + 1
+
+	err := rejectOversizedResponsesCompaction(c, types.RelayFormatOpenAIResponsesCompaction)
+
+	require.NotNil(t, err)
+	require.Equal(t, http.StatusRequestEntityTooLarge, err.StatusCode)
+	require.True(t, types.IsSkipRetryError(err))
 }
 
 func TestRelayAffinitySkipAllowsRetryForAutoDisableError(t *testing.T) {
