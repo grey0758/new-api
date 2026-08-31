@@ -404,6 +404,13 @@ func GenRelayInfoWebSearch(c *gin.Context, request *dto.OpenAIWebSearchRequest) 
 	return info
 }
 
+func GenRelayInfoMemories(c *gin.Context, request *dto.OpenAIMemorySummarizeRequest) *RelayInfo {
+	info := genBaseRelayInfo(c, request)
+	info.RelayMode = relayconstant.RelayModeMemories
+	info.RelayFormat = types.RelayFormatOpenAIMemories
+	return info
+}
+
 func GenRelayInfoGemini(c *gin.Context, request dto.Request) *RelayInfo {
 	info := genBaseRelayInfo(c, request)
 	info.RelayFormat = types.RelayFormatGemini
@@ -569,6 +576,12 @@ func GenRelayInfo(c *gin.Context, relayFormat types.RelayFormat, request dto.Req
 			break
 		}
 		err = errors.New("request is not a OpenAIWebSearchRequest")
+	case types.RelayFormatOpenAIMemories:
+		if request, ok := request.(*dto.OpenAIMemorySummarizeRequest); ok {
+			info = GenRelayInfoMemories(c, request)
+			break
+		}
+		err = errors.New("request is not an OpenAIMemorySummarizeRequest")
 	case types.RelayFormatTask:
 		info = genBaseRelayInfo(c, nil)
 		info.TaskRelayInfo = &TaskRelayInfo{}

@@ -54,12 +54,16 @@ const (
 	RelayModeResponsesCompact
 
 	RelayModeWebSearch
+
+	RelayModeMemories
 )
 
 func Path2RelayMode(path string) int {
 	relayMode := RelayModeUnknown
 	if strings.HasPrefix(path, "/v1/alpha/search") {
 		relayMode = RelayModeWebSearch
+	} else if strings.HasPrefix(path, "/v1/memories/trace_summarize") {
+		relayMode = RelayModeMemories
 	} else if strings.HasPrefix(path, "/v1/chat/completions") || strings.HasPrefix(path, "/pg/chat/completions") {
 		relayMode = RelayModeChatCompletions
 	} else if strings.HasPrefix(path, "/v1/completions") {

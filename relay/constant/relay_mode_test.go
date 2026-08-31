@@ -32,3 +32,9 @@ func TestPath2RelayModeSupportsStandaloneWebSearch(t *testing.T) {
 		t.Fatalf("Path2RelayMode returned %d, want %d", got, RelayModeWebSearch)
 	}
 }
+
+func TestPath2RelayModeSupportsMemories(t *testing.T) {
+	if got := Path2RelayMode("/v1/memories/trace_summarize"); got != RelayModeMemories {
+		t.Fatalf("Path2RelayMode returned %d, want %d", got, RelayModeMemories)
+	}
+}

@@ -50,6 +50,8 @@ func relayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIErro
 		err = relay.ResponsesHelper(c, info)
 	case relayconstant.RelayModeWebSearch:
 		err = relay.WebSearchHelper(c, info)
+	case relayconstant.RelayModeMemories:
+		err = relay.MemoriesHelper(c, info)
 	default:
 		err = relay.TextHelper(c, info)
 	}

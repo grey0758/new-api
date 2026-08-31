@@ -39,6 +39,8 @@ func GetAndValidateRequest(c *gin.Context, format types.RelayFormat) (request dt
 		request, err = GetAndValidateResponsesCompactionRequest(c)
 	case types.RelayFormatOpenAIWebSearch:
 		request, err = GetAndValidateWebSearchRequest(c)
+	case types.RelayFormatOpenAIMemories:
+		request, err = GetAndValidateMemorySummarizeRequest(c)
 
 	case types.RelayFormatOpenAIImage:
 		request, err = GetAndValidOpenAIImageRequest(c, relayMode)
@@ -54,6 +56,42 @@ func GetAndValidateRequest(c *gin.Context, format types.RelayFormat) (request dt
 		return nil, fmt.Errorf("unsupported relay format: %s", format)
 	}
 	return request, err
+}
+
+func GetAndValidateMemorySummarizeRequest(c *gin.Context) (*dto.OpenAIMemorySummarizeRequest, error) {
+	request := &dto.OpenAIMemorySummarizeRequest{}
+	if err := common.UnmarshalBodyReusable(c, request); err != nil {
+		return nil, err
+	}
+	if request.Model == "" {
+		return nil, errors.New("model is required")
+	}
+	if len(request.Traces) == 0 || len(request.Traces) > 16 {
+		return nil, errors.New("traces must contain 1-16 objects")
+	}
+	seen := make(map[string]struct{}, len(request.Traces))
+	for index, trace := range request.Traces {
+		if trace.ID == "" {
+			return nil, fmt.Errorf("traces[%d].id is required", index)
+		}
+		if _, ok := seen[trace.ID]; ok {
+			return nil, fmt.Errorf("traces[%d].id is duplicated", index)
+		}
+		seen[trace.ID] = struct{}{}
+		if trace.Metadata.SourcePath == "" {
+			return nil, fmt.Errorf("traces[%d].metadata.source_path is required", index)
+		}
+		if len(trace.Items) == 0 || len(trace.Items) > 4096 {
+			return nil, fmt.Errorf("traces[%d].items must contain 1-4096 objects", index)
+		}
+		for itemIndex, item := range trace.Items {
+			var value map[string]any
+			if len(item) == 0 || json.Unmarshal(item, &value) != nil || value == nil {
+				return nil, fmt.Errorf("traces[%d].items[%d] must be an object", index, itemIndex)
+			}
+		}
+	}
+	return request, nil
 }
 
 func GetAndValidateWebSearchRequest(c *gin.Context) (*dto.OpenAIWebSearchRequest, error) {
