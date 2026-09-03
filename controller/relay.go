@@ -781,6 +781,13 @@ func RelayTask(c *gin.Context) {
 
 const relayUserVisibleChannelErrorMessage = "号池额度已耗尽正在切换号池，请重试"
 
+var outerToolClientStateMessages = map[types.ErrorCode]string{
+	types.ErrorCode("outer_tool_session_not_found"): "The outer-tool session is no longer available; start a new turn.",
+	types.ErrorCode("outer_tool_session_conflict"):  "The outer-tool session already has a turn in progress.",
+	types.ErrorCode("outer_tool_session_mismatch"):  "The outer-tool session model or tools changed; start a new turn.",
+	types.ErrorCode("missing_tool_output"):          "The outer-tool continuation is missing a required tool output.",
+}
+
 // respondTaskError 统一输出 Task 错误响应，不向用户透传上游错误内容。
 func respondTaskError(c *gin.Context, taskErr *dto.TaskError) {
 	if taskErr.StatusCode == http.StatusTooManyRequests {
@@ -795,6 +802,15 @@ func respondTaskError(c *gin.Context, taskErr *dto.TaskError) {
 func sanitizeRelayErrorForUser(c *gin.Context, err *types.NewAPIError) *types.NewAPIError {
 	if err == nil {
 		return nil
+	}
+	if message, ok := outerToolClientStateMessages[err.GetErrorCode()]; ok &&
+		err.StatusCode >= http.StatusBadRequest && err.StatusCode < http.StatusInternalServerError {
+		return types.NewErrorWithStatusCode(
+			errors.New(message),
+			err.GetErrorCode(),
+			err.StatusCode,
+			types.ErrOptionWithSkipRetry(),
+		)
 	}
 	if !shouldHideRelayErrorFromUser(c, err) {
 		return err

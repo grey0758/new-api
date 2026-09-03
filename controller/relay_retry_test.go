@@ -268,6 +268,50 @@ func TestSanitizeRelayErrorForUserKeepsClientRequestError(t *testing.T) {
 	require.Same(t, err, sanitizeRelayErrorForUser(c, err))
 }
 
+func TestSanitizeRelayErrorForUserPreservesAllowlistedOuterToolState(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set("relay_channel_error_seen", true)
+	err := types.WithOpenAIError(
+		types.OpenAIError{
+			Message: "private upstream details must not pass",
+			Type:    "invalid_request_error",
+			Code:    "outer_tool_session_not_found",
+		},
+		http.StatusBadRequest,
+	)
+
+	sanitized := sanitizeRelayErrorForUser(c, err)
+
+	require.NotNil(t, sanitized)
+	require.Equal(t, http.StatusBadRequest, sanitized.StatusCode)
+	require.Equal(t, types.ErrorCode("outer_tool_session_not_found"), sanitized.GetErrorCode())
+	require.True(t, types.IsSkipRetryError(sanitized))
+	require.Contains(t, sanitized.Error(), "start a new turn")
+	require.NotContains(t, sanitized.ToOpenAIError().Message, "private upstream")
+	require.False(t, shouldRetry(c, sanitized, 3, 68))
+}
+
+func TestSanitizeRelayErrorForUserStillHidesUnknownMapped400(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set("relay_channel_error_seen", true)
+	err := types.WithOpenAIError(
+		types.OpenAIError{
+			Message: "unknown provider detail",
+			Type:    "invalid_request_error",
+			Code:    "unknown_mapped_error",
+		},
+		http.StatusBadRequest,
+	)
+
+	sanitized := sanitizeRelayErrorForUser(c, err)
+
+	require.Equal(t, http.StatusServiceUnavailable, sanitized.StatusCode)
+	require.Equal(t, types.ErrorCodeBadResponseStatusCode, sanitized.GetErrorCode())
+	require.NotContains(t, sanitized.ToOpenAIError().Message, "unknown provider")
+}
+
 func TestSanitizeRelayErrorForUserKeepsProviderPolicyViolation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
