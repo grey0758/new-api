@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -20,6 +21,27 @@ var (
 	proxyClientLock sync.Mutex
 	proxyClients    = make(map[string]*http.Client)
 )
+
+// maxTimeoutSeconds is the largest number of seconds that safely converts to
+// a time.Duration on this platform.
+const maxTimeoutSeconds = int(math.MaxInt64 / int64(time.Second))
+
+func relayResponseHeaderTimeout() time.Duration {
+	seconds := common.RelayResponseHeaderTimeout
+	if seconds <= 0 {
+		return 0
+	}
+	if seconds > maxTimeoutSeconds {
+		seconds = maxTimeoutSeconds
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func applyRelayResponseHeaderTimeout(transport *http.Transport) {
+	if timeout := relayResponseHeaderTimeout(); timeout > 0 {
+		transport.ResponseHeaderTimeout = timeout
+	}
+}
 
 func checkRedirect(req *http.Request, via []*http.Request) error {
 	fetchSetting := system_setting.GetFetchSetting()
@@ -40,6 +62,7 @@ func InitHttpClient() {
 		ForceAttemptHTTP2:   true,
 		Proxy:               http.ProxyFromEnvironment, // Support HTTP_PROXY, HTTPS_PROXY, NO_PROXY env vars
 	}
+	applyRelayResponseHeaderTimeout(transport)
 	if common.TLSInsecureSkipVerify {
 		transport.TLSClientConfig = common.InsecureTLSConfig
 	}
@@ -111,6 +134,7 @@ func NewProxyHttpClient(proxyURL string) (*http.Client, error) {
 			ForceAttemptHTTP2:   true,
 			Proxy:               http.ProxyURL(parsedURL),
 		}
+		applyRelayResponseHeaderTimeout(transport)
 		if common.TLSInsecureSkipVerify {
 			transport.TLSClientConfig = common.InsecureTLSConfig
 		}
@@ -152,6 +176,7 @@ func NewProxyHttpClient(proxyURL string) (*http.Client, error) {
 				return dialer.Dial(network, addr)
 			},
 		}
+		applyRelayResponseHeaderTimeout(transport)
 		if common.TLSInsecureSkipVerify {
 			transport.TLSClientConfig = common.InsecureTLSConfig
 		}
