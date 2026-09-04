@@ -487,6 +487,9 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int, c
 	if types.IsSkipRetryError(openaiErr) {
 		return false
 	}
+	if service.IsClientRequestValidationError(openaiErr) {
+		return false
+	}
 	if retryTimes <= 0 {
 		return false
 	}
@@ -526,7 +529,9 @@ func shouldRetryRelayError(openaiErr *types.NewAPIError) bool {
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, err.Error()))
 	service.RecordRelayChannelHealthEvent(c, channelError, err)
-	service.RecordUpstream400ViolationCandidate(c, channelError, err)
+	if !service.IsClientRequestValidationError(err) && !service.IsRequestScopedUpstreamRejectionError(err) {
+		service.RecordUpstream400ViolationCandidate(c, channelError, err)
+	}
 	c.Set("relay_channel_error_seen", true)
 	if !service.IsResponsesStreamIncompleteError(err) {
 		service.RecordChannelFailureForCooldownWithActor(channelError, err, c.GetString("original_model"), c.GetInt("id"), c.GetInt("token_id"))

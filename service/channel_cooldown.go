@@ -195,6 +195,19 @@ func IsClientRequestValidationError(err *types.NewAPIError) bool {
 	if strings.Contains(lowerCode, "invalid_type") || strings.Contains(lowerType, "invalid_request") {
 		return true
 	}
+	clientValidationCodes := []string{
+		"duplicate_tool_output",
+		"missing_tool_output",
+		"invalid_tool_output",
+		"outer_tool_session_not_found",
+		"outer_tool_session_conflict",
+		"prompt_cache_key_required",
+	}
+	for _, code := range clientValidationCodes {
+		if strings.Contains(lowerCode, code) || strings.Contains(lowerMessage, code) {
+			return true
+		}
+	}
 	clientValidationHints := []string{
 		"invalid type for",
 		"expected an object",
@@ -205,6 +218,13 @@ func IsClientRequestValidationError(err *types.NewAPIError) bool {
 		"invalid parameter",
 		"invalid request body",
 		"invalid request",
+		"duplicate tool output",
+		"missing tool output",
+		"tool outputs must match",
+		"paused outer-tool session",
+		"no paused outer-tool session",
+		"prompt_cache_key is required when tools",
+		"call_id may have only one tool output",
 	}
 	for _, hint := range clientValidationHints {
 		if strings.Contains(lowerMessage, hint) {

@@ -142,6 +142,56 @@ func TestClientRequestValidationErrorDoesNotTriggerChannelCooldown(t *testing.T)
 	require.False(t, IsChannelCoolingDown(35))
 }
 
+func TestBridgeToolSessionErrorsAreClientValidationErrors(t *testing.T) {
+	cases := []struct {
+		name    string
+		code    string
+		message string
+	}{
+		{name: "duplicate tool output", code: "duplicate_tool_output", message: "Each call_id may have only one tool output"},
+		{name: "missing tool output", code: "missing_tool_output", message: "Tool outputs must match every pending call_id exactly once"},
+		{name: "invalid tool output", code: "invalid_tool_output", message: "tool output is invalid"},
+		{name: "paused session not found", code: "outer_tool_session_not_found", message: "No paused outer-tool session matches this prompt_cache_key"},
+		{name: "paused session conflict", code: "outer_tool_session_conflict", message: "An outer-tool session already uses this prompt_cache_key"},
+		{name: "cache key required", code: "prompt_cache_key_required", message: "prompt_cache_key is required when tools are declared"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := types.NewErrorWithStatusCode(errors.New(tc.message), types.ErrorCodeBadResponseStatusCode, http.StatusBadRequest)
+			err.RelayError = types.OpenAIError{Type: "invalid_request_error", Code: tc.code, Message: tc.message}
+			require.True(t, IsClientRequestValidationError(err))
+		})
+	}
+}
+
+func TestBridgeToolSessionErrorsDoNotTriggerChannelCooldown(t *testing.T) {
+	originalEnabled := common.AutomaticChannelCooldownEnabled
+	originalRedisEnabled := common.RedisEnabled
+	originalThreshold := common.ChannelCooldownFailureThreshold
+	originalWindow := common.ChannelCooldownFailureWindowSeconds
+	originalCooldown := common.ChannelCooldownSeconds
+	t.Cleanup(func() {
+		common.AutomaticChannelCooldownEnabled = originalEnabled
+		common.RedisEnabled = originalRedisEnabled
+		common.ChannelCooldownFailureThreshold = originalThreshold
+		common.ChannelCooldownFailureWindowSeconds = originalWindow
+		common.ChannelCooldownSeconds = originalCooldown
+		channelCooldownMu.Lock()
+		channelCooldownLocal = map[int]channelCooldownEntry{}
+		channelCooldownMu.Unlock()
+	})
+	common.AutomaticChannelCooldownEnabled = true
+	common.RedisEnabled = false
+	common.ChannelCooldownFailureThreshold = 1
+	common.ChannelCooldownFailureWindowSeconds = 60
+	common.ChannelCooldownSeconds = 60
+	channelError := *types.NewChannelError(168, 1, "channel-68", false, "", true)
+	err := types.NewErrorWithStatusCode(errors.New("Each call_id may have only one tool output"), types.ErrorCodeBadResponseStatusCode, http.StatusBadRequest)
+	err.RelayError = types.OpenAIError{Type: "invalid_request_error", Code: "duplicate_tool_output", Message: "Each call_id may have only one tool output"}
+	RecordChannelFailureForCooldown(channelError, err)
+	require.False(t, IsChannelCoolingDown(channelError.ChannelId))
+}
+
 func TestResponsesStreamIncompleteDoesNotTriggerChannelCooldown(t *testing.T) {
 	originalEnabled := common.AutomaticChannelCooldownEnabled
 	originalRedisEnabled := common.RedisEnabled

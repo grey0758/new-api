@@ -228,6 +228,17 @@ func TestRelayDoesNotStartSecondSelectionCycleForClientErrorOrSpecificChannel(t 
 	require.False(t, shouldStartNextRelayChannelSelectionCycle(c, info, upstreamErr, 0))
 }
 
+func TestRelayDoesNotRetryBridgeToolSessionError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	err := types.NewErrorWithStatusCode(errors.New("Each call_id may have only one tool output"), types.ErrorCodeBadResponseStatusCode, http.StatusBadRequest)
+	err.RelayError = types.OpenAIError{Type: "invalid_request_error", Code: "duplicate_tool_output", Message: "Each call_id may have only one tool output"}
+	require.True(t, service.IsClientRequestValidationError(err))
+	require.False(t, shouldRetry(c, err, 3, 68))
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	require.False(t, shouldStartNextRelayChannelSelectionCycle(c, info, err, 0))
+}
+
 func TestTaskRelayAffinitySkipKeepsChannelBeforeCooldown(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
