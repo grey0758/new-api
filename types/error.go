@@ -90,14 +90,15 @@ const (
 )
 
 type NewAPIError struct {
-	Err            error
-	RelayError     any
-	skipRetry      bool
-	recordErrorLog *bool
-	errorType      ErrorType
-	errorCode      ErrorCode
-	StatusCode     int
-	Metadata       json.RawMessage
+	Err               error
+	RelayError        any
+	skipRetry         bool
+	recordErrorLog    *bool
+	errorType         ErrorType
+	errorCode         ErrorCode
+	StatusCode        int
+	Metadata          json.RawMessage
+	preserveUserError bool
 }
 
 // Unwrap enables errors.Is / errors.As to work with NewAPIError by exposing the underlying error.
@@ -177,6 +178,10 @@ func (e *NewAPIError) MaskSensitiveErrorWithStatusCode() string {
 
 func (e *NewAPIError) SetMessage(message string) {
 	e.Err = errors.New(message)
+}
+
+func ShouldPreserveUserError(e *NewAPIError) bool {
+	return e != nil && e.preserveUserError
 }
 
 func (e *NewAPIError) ToOpenAIError() OpenAIError {
@@ -395,6 +400,12 @@ func ErrOptionWithNoRecordErrorLog() NewAPIErrorOptions {
 func ErrOptionWithStatusCode(statusCode int) NewAPIErrorOptions {
 	return func(e *NewAPIError) {
 		e.StatusCode = statusCode
+	}
+}
+
+func ErrOptionWithPreserveUserError() NewAPIErrorOptions {
+	return func(e *NewAPIError) {
+		e.preserveUserError = true
 	}
 }
 

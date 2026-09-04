@@ -18,6 +18,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGrsaiImageErrorPreservesProviderResponse(t *testing.T) {
+	resp := &http.Response{StatusCode: http.StatusBadRequest, Body: io.NopCloser(strings.NewReader(`{"status":"failed","error":{"code":"insufficient_credits","type":"provider_error","message":"insufficient credits"}}`))}
+	err := GrsaiImageErrorHandler(context.Background(), resp)
+	require.Equal(t, http.StatusBadRequest, err.StatusCode)
+	require.Equal(t, types.ErrorCode("insufficient_credits"), err.GetErrorCode())
+	require.Contains(t, err.Error(), "insufficient credits")
+	require.True(t, types.ShouldPreserveUserError(err))
+}
+
+func TestGrsaiImageFailed200PreservesProviderResponse(t *testing.T) {
+	err := newGrsaiImageError(
+		[]byte(`{"status":"failed","error":{"code":"insufficient_credits","type":"provider_error","message":"insufficient credits"}}`),
+		http.StatusOK,
+		context.Background(),
+	)
+	require.Equal(t, http.StatusServiceUnavailable, err.StatusCode)
+	require.Equal(t, types.ErrorCode("insufficient_credits"), err.GetErrorCode())
+	require.Contains(t, err.Error(), "insufficient credits")
+	require.True(t, types.ShouldPreserveUserError(err))
+}
+
 func TestGrsaiImageGenerationUsesGenerateEndpoint(t *testing.T) {
 	info := &relaycommon.RelayInfo{
 		RelayMode:      relayconstant.RelayModeImagesGenerations,

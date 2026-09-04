@@ -157,7 +157,7 @@ function getEventScopeDescription(scope) {
     return '这里仅显示最终请求错误、中间渠道失败但已 failover 成功、上游/provider 凭证池限流等用户请求链路事件。用户额度不足属于请求错误历史，不代表探针失败，也不代表渠道当前冷却。';
   }
   if (scope === 'probe') {
-    return '这里仅显示主动探针、NewAPI 渠道冷却和手动恢复历史。倍率后缀或手动开启主动探针的渠道会每分钟持续探测；探针失败或探针 60s 内没有返回有效流内容时会进入/保持 NewAPI 冷却，通过后恢复调度。';
+    return '这里默认把一次探针生命周期合并为一条记录，扫描、开始、成功/失败、冷却等原始事件会折叠到同一行的细节中。倍率后缀或手动开启主动探针的渠道会每分钟持续探测；探针失败或探针 60s 内没有返回有效流内容时会进入/保持 NewAPI 冷却，通过后恢复调度。';
   }
   return '这里显示最近 7 天的渠道健康事件。';
 }
@@ -273,9 +273,7 @@ const ChannelHealth = () => {
       { type: t('曾上游限流'), value: summary?.provider_cooldowns || 0 },
       { type: t('曾NewAPI冷却'), value: summary?.newapi_cooldowns || 0 },
       { type: t('探针等待'), value: summary?.probe_waiting || 0 },
-      { type: t('探针扫描'), value: summary?.probe_scanned || 0 },
       { type: t('探针跳过'), value: summary?.probe_skipped || 0 },
-      { type: t('探针中'), value: summary?.probe_started || 0 },
       { type: t('探针失败'), value: summary?.probe_failed || 0 },
       { type: t('探针成功'), value: summary?.probe_succeeded || 0 },
       { type: t('手动恢复'), value: summary?.manual_recovered || 0 },
@@ -628,19 +626,9 @@ const ChannelHealth = () => {
                   {t('探针等待')} {events.probe_waiting}
                 </Tag>
               ) : null}
-              {events?.probe_scanned ? (
-                <Tag color='blue' size='small'>
-                  {t('探针扫描')} {events.probe_scanned}
-                </Tag>
-              ) : null}
               {events?.probe_skipped ? (
                 <Tag color='grey' size='small'>
                   {t('探针跳过')} {events.probe_skipped}
-                </Tag>
-              ) : null}
-              {events?.probe_started ? (
-                <Tag color='blue' size='small'>
-                  {t('探针中')} {events.probe_started}
                 </Tag>
               ) : null}
               {events?.probe_failed ? (
@@ -861,16 +849,32 @@ const ChannelHealth = () => {
       title: t('时间'),
       dataIndex: 'created_at',
       width: 170,
-      render: (value) => formatTime(value),
+      render: (value, record) => (
+        <div className='space-y-1'>
+          <Text size='small'>{formatTime(value)}</Text>
+          {record?.merged_probe && record?.started_at ? (
+            <Text type='tertiary' size='small'>
+              {t('开始')} {formatTime(record.started_at)}
+            </Text>
+          ) : null}
+        </div>
+      ),
     },
     {
       title: t('类型'),
       dataIndex: 'event_type',
       width: 150,
-      render: (value) => (
-        <Tag color={getEventColor(value)} size='small'>
-          {t(getEventLabel(value))}
-        </Tag>
+      render: (value, record) => (
+        <Space wrap spacing={4}>
+          <Tag color={getEventColor(value)} size='small'>
+            {t(getEventLabel(value))}
+          </Tag>
+          {record?.merged_probe ? (
+            <Tag color='blue' size='small'>
+              {t('已合并')}
+            </Tag>
+          ) : null}
+        </Space>
       ),
     },
     {
@@ -909,6 +913,12 @@ const ChannelHealth = () => {
       render: (other) => {
         const detail = other || {};
         const preferredKeys = [
+          'probe_mode',
+          'raw_event_count',
+          'raw_event_types',
+          'duration_seconds',
+          'started_at',
+          'finished_at',
           'skip_reason',
           'cooldown_ttl_seconds',
           'next_probe_at',

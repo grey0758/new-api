@@ -449,6 +449,7 @@ func TestCLIProxyResponsesRoundTrip(t *testing.T) {
 	if cancelRequestBody != cancelBody {
 		t.Fatalf("expected cancel body %q, got %q", cancelBody, cancelRequestBody)
 	}
+
 }
 
 func setupRelayRouterTestDB(t *testing.T) {

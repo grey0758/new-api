@@ -624,7 +624,7 @@ func GrsaiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	}
 
 	if !strings.EqualFold(grsaiResp.Status, "succeeded") || len(grsaiResp.Results) == 0 {
-		return nil, types.NewOpenAIError(fmt.Errorf("grsai image request failed: status=%s", grsaiResp.Status), types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, newGrsaiImageError(responseBody, resp.StatusCode, c.Request.Context())
 	}
 
 	imageResp := dto.ImageResponse{

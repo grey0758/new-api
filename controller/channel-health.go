@@ -83,6 +83,9 @@ type channelHealthItem struct {
 type channelHealthEventItem struct {
 	ID            int                    `json:"id"`
 	CreatedAt     int64                  `json:"created_at"`
+	StartedAt     int64                  `json:"started_at,omitempty"`
+	FinishedAt    int64                  `json:"finished_at,omitempty"`
+	Duration      int64                  `json:"duration_seconds,omitempty"`
 	EventType     string                 `json:"event_type"`
 	Content       string                 `json:"content"`
 	ModelName     string                 `json:"model_name"`
@@ -97,6 +100,9 @@ type channelHealthEventItem struct {
 	Other         map[string]interface{} `json:"other"`
 	ProbeEvent    bool                   `json:"probe_event"`
 	CooldownEvent bool                   `json:"cooldown_event"`
+	MergedProbe   bool                   `json:"merged_probe,omitempty"`
+	RawEventCount int                    `json:"raw_event_count,omitempty"`
+	RawEventTypes []string               `json:"raw_event_types,omitempty"`
 }
 
 func GetChannelHealth(c *gin.Context) {
@@ -241,6 +247,15 @@ func GetChannelHealthEvents(c *gin.Context) {
 	since := common.GetTimestamp() - int64(hours)*3600
 	scopeWhere, scopeArgs := channelHealthEventScopeWhere(scope)
 	queryLimit := limit
+	if scope == "probe" {
+		queryLimit = limit * 8
+		if queryLimit < 200 {
+			queryLimit = 200
+		}
+		if queryLimit > 2000 {
+			queryLimit = 2000
+		}
+	}
 
 	logs := make([]*model.Log, 0)
 	query := model.LOG_DB.Model(&model.Log{}).
@@ -298,17 +313,231 @@ func GetChannelHealthEvents(c *gin.Context) {
 		}
 	}
 
+	responseItems := items
+	rawItemCount := len(items)
+	merged := false
+	if scope == "probe" {
+		responseItems = mergeChannelProbeEvents(items, limit)
+		merged = true
+	}
+
 	common.ApiSuccess(c, gin.H{
-		"items": items,
+		"items": responseItems,
 		"meta": gin.H{
-			"channel_id":  channelID,
-			"hours":       hours,
-			"limit":       limit,
-			"probe_only":  probeOnly,
-			"scope":       scope,
-			"window_from": since,
+			"channel_id":      channelID,
+			"hours":           hours,
+			"limit":           limit,
+			"probe_only":      probeOnly,
+			"scope":           scope,
+			"window_from":     since,
+			"merged_probe":    merged,
+			"raw_item_count":  rawItemCount,
+			"result_count":    len(responseItems),
+			"raw_query_limit": queryLimit,
 		},
 	})
+}
+
+type channelProbeEventAccumulator struct {
+	item      channelHealthEventItem
+	eventSet  map[string]bool
+	eventList []string
+}
+
+func mergeChannelProbeEvents(items []channelHealthEventItem, limit int) []channelHealthEventItem {
+	if len(items) == 0 {
+		return items
+	}
+	chronological := make([]channelHealthEventItem, 0, len(items))
+	for i := len(items) - 1; i >= 0; i-- {
+		chronological = append(chronological, items[i])
+	}
+	accumulators := make(map[string]*channelProbeEventAccumulator)
+	merged := make([]channelHealthEventItem, 0, len(items))
+	for _, item := range chronological {
+		if !isChannelHealthProbeScopeEvent(item.EventType) {
+			merged = append(merged, item)
+			continue
+		}
+		mode := probeModeFromHealthEventItem(item)
+		switch item.EventType {
+		case service.ChannelHealthEventProbeScanned, service.ChannelHealthEventProbeStarted:
+			acc := accumulators[channelProbeMergeKey(item.ChannelID, mode)]
+			if acc == nil || acc.item.EventType == service.ChannelHealthEventProbeStarted {
+				acc = newChannelProbeEventAccumulator(item, mode)
+				accumulators[channelProbeMergeKey(item.ChannelID, mode)] = acc
+			}
+			acc.add(item)
+			if item.EventType == service.ChannelHealthEventProbeStarted {
+				acc.item.StartedAt = item.CreatedAt
+				acc.item.CreatedAt = item.CreatedAt
+				acc.item.EventType = item.EventType
+				acc.item.Content = item.Content
+				acc.item.ID = item.ID
+				acc.item.ModelName = firstNonEmptyChannelHealthValue(acc.item.ModelName, item.ModelName)
+			}
+		case service.ChannelHealthEventNewAPICooling:
+			acc := accumulators[channelProbeMergeKey(item.ChannelID, mode)]
+			if acc == nil {
+				acc = newChannelProbeEventAccumulator(item, mode)
+				accumulators[channelProbeMergeKey(item.ChannelID, mode)] = acc
+			}
+			acc.add(item)
+			acc.item.ID = maxInt(acc.item.ID, item.ID)
+			acc.item.CreatedAt = item.CreatedAt
+			acc.item.Content = item.Content
+			acc.item.EventType = item.EventType
+		case service.ChannelHealthEventProbeSucceeded, service.ChannelHealthEventProbeFailed, service.ChannelHealthEventProbeSkipped:
+			key := channelProbeMergeKey(item.ChannelID, mode)
+			acc := accumulators[key]
+			if acc == nil {
+				acc = newChannelProbeEventAccumulator(item, mode)
+			}
+			acc.add(item)
+			acc.finish(item)
+			merged = append(merged, acc.item)
+			delete(accumulators, key)
+		default:
+			acc := newChannelProbeEventAccumulator(item, mode)
+			acc.add(item)
+			acc.finish(item)
+			merged = append(merged, acc.item)
+		}
+	}
+	for _, acc := range accumulators {
+		acc.finish(acc.item)
+		merged = append(merged, acc.item)
+	}
+	sortChannelHealthEventItemsDesc(merged)
+	if limit > 0 && len(merged) > limit {
+		return merged[:limit]
+	}
+	return merged
+}
+
+func newChannelProbeEventAccumulator(item channelHealthEventItem, mode string) *channelProbeEventAccumulator {
+	if item.Other == nil {
+		item.Other = map[string]interface{}{}
+	}
+	if mode != "" {
+		item.Other["probe_mode"] = mode
+	}
+	item.MergedProbe = true
+	item.StartedAt = item.CreatedAt
+	item.FinishedAt = item.CreatedAt
+	return &channelProbeEventAccumulator{
+		item:     item,
+		eventSet: make(map[string]bool),
+	}
+}
+
+func (acc *channelProbeEventAccumulator) add(item channelHealthEventItem) {
+	if acc == nil {
+		return
+	}
+	acc.item.RawEventCount++
+	if item.EventType != "" && !acc.eventSet[item.EventType] {
+		acc.eventSet[item.EventType] = true
+		acc.eventList = append(acc.eventList, item.EventType)
+	}
+	if acc.item.Other == nil {
+		acc.item.Other = map[string]interface{}{}
+	}
+	if item.StatusCode != 0 {
+		acc.item.StatusCode = item.StatusCode
+	}
+	if item.ErrorType != "" {
+		acc.item.ErrorType = item.ErrorType
+	}
+	if item.ErrorCode != "" {
+		acc.item.ErrorCode = item.ErrorCode
+	}
+	if item.ModelName != "" {
+		acc.item.ModelName = item.ModelName
+	}
+	for _, key := range []string{"skip_reason", "cooldown_ttl_seconds", "next_probe_at", "last_failure_at", "probe_model", "probe_endpoint", "probe_protocol", "active_probe_mode", "cooldown_seconds", "recovered"} {
+		if value, ok := item.Other[key]; ok {
+			acc.item.Other[key] = value
+		}
+	}
+}
+
+func (acc *channelProbeEventAccumulator) finish(item channelHealthEventItem) {
+	if acc == nil {
+		return
+	}
+	acc.item.ID = maxInt(acc.item.ID, item.ID)
+	acc.item.CreatedAt = item.CreatedAt
+	acc.item.FinishedAt = item.CreatedAt
+	acc.item.EventType = item.EventType
+	acc.item.Content = item.Content
+	acc.item.StatusCode = item.StatusCode
+	acc.item.ErrorType = item.ErrorType
+	acc.item.ErrorCode = item.ErrorCode
+	acc.item.ProbeEvent = isChannelHealthProbeEvent(item.EventType)
+	acc.item.CooldownEvent = isChannelHealthCooldownEvent(item.EventType)
+	if acc.item.StartedAt <= 0 {
+		acc.item.StartedAt = item.CreatedAt
+	}
+	if acc.item.FinishedAt > acc.item.StartedAt {
+		acc.item.Duration = acc.item.FinishedAt - acc.item.StartedAt
+	}
+	acc.item.RawEventTypes = append([]string(nil), acc.eventList...)
+	if acc.item.Other == nil {
+		acc.item.Other = map[string]interface{}{}
+	}
+	acc.item.Other["merged_probe"] = true
+	acc.item.Other["raw_event_count"] = acc.item.RawEventCount
+	acc.item.Other["raw_event_types"] = acc.item.RawEventTypes
+	acc.item.Other["started_at"] = acc.item.StartedAt
+	acc.item.Other["finished_at"] = acc.item.FinishedAt
+	acc.item.Other["duration_seconds"] = acc.item.Duration
+}
+
+func probeModeFromHealthEventItem(item channelHealthEventItem) string {
+	mode := stringFromHealthEvent(item.Other["probe_mode"])
+	if mode != "" {
+		return mode
+	}
+	if item.EventType == service.ChannelHealthEventProbeScanned {
+		mode = stringFromHealthEvent(item.Other["active_probe_mode"])
+		if mode != "" {
+			return mode
+		}
+	}
+	return "cooldown_recovery"
+}
+
+func channelProbeMergeKey(channelID int, mode string) string {
+	return fmt.Sprintf("%d:%s", channelID, mode)
+}
+
+func sortChannelHealthEventItemsDesc(items []channelHealthEventItem) {
+	for i := 1; i < len(items); i++ {
+		current := items[i]
+		j := i - 1
+		for j >= 0 && (items[j].CreatedAt < current.CreatedAt || (items[j].CreatedAt == current.CreatedAt && items[j].ID < current.ID)) {
+			items[j+1] = items[j]
+			j--
+		}
+		items[j+1] = current
+	}
+}
+
+func firstNonEmptyChannelHealthValue(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func maxInt(a int, b int) int {
+	if b > a {
+		return b
+	}
+	return a
 }
 
 func channelHealthEventScopeWhere(scope string) (string, []interface{}) {

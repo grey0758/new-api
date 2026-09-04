@@ -3,6 +3,7 @@ package openai
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -39,6 +40,7 @@ func newGrsaiContentPolicyViolationError() *types.NewAPIError {
 		},
 		http.StatusBadRequest,
 		types.ErrOptionWithSkipRetry(),
+		types.ErrOptionWithPreserveUserError(),
 	)
 }
 
@@ -49,16 +51,12 @@ func IsGrsaiImageCompat(info *relaycommon.RelayInfo) bool {
 	return isGrsaiImageCompat(info)
 }
 
-// GrsaiImageErrorHandler preserves the normal OpenAI error path for ordinary
-// upstream failures, but gives GrsAI's native policy response a stable,
-// client-visible, non-retryable 4xx shape.
+// GrsaiImageErrorHandler preserves provider fields for client-visible 4xx
+// responses, while keeping transient 5xx/429 failures on the normal retry
+// path and giving native policy responses a stable non-retryable shape.
 func GrsaiImageErrorHandler(ctx context.Context, resp *http.Response) *types.NewAPIError {
 	if resp == nil || resp.Body == nil {
-		return types.NewOpenAIError(
-			io.ErrUnexpectedEOF,
-			types.ErrorCodeReadResponseBodyFailed,
-			http.StatusInternalServerError,
-		)
+		return types.NewOpenAIError(io.ErrUnexpectedEOF, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -67,19 +65,56 @@ func GrsaiImageErrorHandler(ctx context.Context, resp *http.Response) *types.New
 		return types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
 
-	var payload grsaiImageErrorPayload
-	if common.Unmarshal(body, &payload) == nil && isGrsaiContentPolicyViolation(payload) {
-		return newGrsaiContentPolicyViolationError()
+	return newGrsaiImageError(body, resp.StatusCode, ctx)
+}
+
+func newGrsaiImageError(body []byte, statusCode int, ctx context.Context) *types.NewAPIError {
+	if statusCode < http.StatusBadRequest {
+		statusCode = http.StatusServiceUnavailable
 	}
 
-	// Reuse the existing generic parser for non-policy GrsAI failures so
-	// transient 5xx/429 and other provider errors keep their old behavior.
-	resp.Body = io.NopCloser(bytes.NewReader(body))
+	var payload grsaiImageErrorPayload
+	if common.Unmarshal(body, &payload) == nil {
+		if isGrsaiContentPolicyViolation(payload) {
+			return newGrsaiContentPolicyViolationError()
+		}
+		message := firstNonEmpty(payload.Error.Message, payload.Message, payload.Msg, payload.ErrorMsg, payload.Detail)
+		code := firstNonEmpty(payload.Error.Code, payload.Code, payload.Error.Type, payload.Type)
+		if message != "" || code != "" || payload.Status != "" {
+			if message == "" {
+				message = payload.Status
+			}
+			if code == "" {
+				code = string(types.ErrorCodeBadResponseStatusCode)
+			}
+			return types.WithOpenAIError(types.OpenAIError{
+				Message: message,
+				Type:    firstNonEmpty(payload.Error.Type, payload.Type, "upstream_error"),
+				Code:    code,
+			}, statusCode, types.ErrOptionWithPreserveUserError())
+		}
+	}
+
+	// Reuse the existing generic parser for transient and unstructured
+	// failures so their established retry/cooldown behavior is unchanged.
+	resp := &http.Response{StatusCode: statusCode, Body: io.NopCloser(bytes.NewReader(body))}
 	fallback := service.RelayErrorHandler(ctx, resp, false)
+	if fallback == nil {
+		fallback = types.NewOpenAIError(errors.New("grsai image request failed"), types.ErrorCodeBadResponseStatusCode, statusCode)
+	}
 	if fallback != nil && fallback.StatusCode == http.StatusBadRequest && service.IsRequestScopedUpstreamRejectionError(fallback) {
 		return newGrsaiContentPolicyViolationError()
 	}
-	return fallback
+	return types.NewError(fallback, fallback.GetErrorCode(), types.ErrOptionWithPreserveUserError())
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func isGrsaiContentPolicyViolation(payload grsaiImageErrorPayload) bool {

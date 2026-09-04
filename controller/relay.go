@@ -839,7 +839,7 @@ func shouldHideRelayErrorFromUser(c *gin.Context, err *types.NewAPIError) bool {
 	// Request-scoped provider policy rejections are valid client-visible 4xx
 	// responses. They must not be rewritten as a generic channel 503 merely
 	// because the failed attempt was recorded in the channel health lifecycle.
-	if service.IsRequestScopedUpstreamRejectionError(err) {
+	if service.IsRequestScopedUpstreamRejectionError(err) || types.ShouldPreserveUserError(err) {
 		return false
 	}
 	if c != nil && c.GetBool("relay_channel_error_seen") {
