@@ -303,6 +303,32 @@ func TestSanitizeRelayErrorForUserPreservesAllowlistedOuterToolState(t *testing.
 	require.False(t, shouldRetry(c, sanitized, 3, 68))
 }
 
+func TestSanitizeRelayErrorForUserPreservesDuplicateToolOutput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set("relay_channel_error_seen", true)
+	err := types.NewErrorWithStatusCode(
+		errors.New("Each call_id may have only one tool output"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusBadRequest,
+	)
+	err.RelayError = types.OpenAIError{
+		Message: "Each call_id may have only one tool output",
+		Type:    "invalid_request_error",
+		Code:    "duplicate_tool_output",
+	}
+
+	sanitized := sanitizeRelayErrorForUser(c, err)
+
+	require.NotNil(t, sanitized)
+	require.Equal(t, http.StatusBadRequest, sanitized.StatusCode)
+	require.Equal(t, types.ErrorCode("duplicate_tool_output"), sanitized.GetErrorCode())
+	require.True(t, types.IsSkipRetryError(sanitized))
+	require.Equal(t, "The outer-tool continuation already contains an output for this call.", sanitized.Error())
+	require.NotContains(t, sanitized.Error(), "Each call_id")
+	require.False(t, shouldRetry(c, sanitized, 3, 68))
+}
+
 func TestSanitizeRelayErrorForUserStillHidesUnknownMapped400(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
