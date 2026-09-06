@@ -59,13 +59,6 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	// 无条件新建 StreamStatus
 	info.StreamStatus = relaycommon.NewStreamStatus()
 
-	// 确保响应体总是被关闭
-	defer func() {
-		if resp.Body != nil {
-			resp.Body.Close()
-		}
-	}()
-
 	streamingTimeout := resolveStreamingTimeout(info)
 
 	var (
@@ -105,6 +98,11 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		ticker.Stop()
 		if pingTicker != nil {
 			pingTicker.Stop()
+		}
+		// A silent Scan cannot observe stopChan. Close the body before waiting
+		// so cancellation, timeouts and handler stops release the upstream now.
+		if resp.Body != nil {
+			_ = resp.Body.Close()
 		}
 
 		// 等待所有 goroutine 退出，最多等待5秒
@@ -289,6 +287,13 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		}
 
 		if err := scanner.Err(); err != nil {
+			if clientErr := c.Request.Context().Err(); clientErr != nil {
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, clientErr)
+				return
+			}
+			if ctx.Err() != nil {
+				return
+			}
 			if err != io.EOF {
 				logger.LogError(c, "scanner error: "+err.Error())
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, err)

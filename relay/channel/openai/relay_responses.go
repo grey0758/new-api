@@ -213,7 +213,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		logger.LogError(c, streamErr.Error())
 	}
 
-	if !completed {
+	if !completed && !(info.IsOuterToolsStream() && c.Request.Context().Err() != nil) {
 		err := fmt.Errorf("responses stream closed before response.completed: end=%s received=%d sent=%d", info.StreamStatus.Summary(), info.ReceivedResponseCount, info.SendResponseCount)
 		service.RecordResponsesStreamFailover(c, modelName, channelID)
 		service.RecordResponsesStreamGuard(c, modelName)

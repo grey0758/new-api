@@ -25,6 +25,14 @@ type ThinkingContentInfo struct {
 	HasSentThinkingContent  bool
 }
 
+// IsOuterToolsStream identifies an interactive bridge turn whose lifetime is
+// owned by the caller connection, including silent inference before headers.
+func (info *RelayInfo) IsOuterToolsStream() bool {
+	return info != nil && info.ChannelMeta != nil && info.IsStream &&
+		info.RelayMode == relayconstant.RelayModeResponses &&
+		strings.HasSuffix(strings.TrimRight(strings.TrimSpace(info.ChannelBaseUrl), "/"), "/outer-tools")
+}
+
 const (
 	LastMessageTypeNone     = "none"
 	LastMessageTypeText     = "text"

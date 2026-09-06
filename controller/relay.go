@@ -341,6 +341,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 			newAPIError = service.NormalizeViolationFeeError(newAPIError)
 			relayInfo.LastError = newAPIError
+			if relayInfo.IsOuterToolsStream() && c.Request.Context().Err() != nil {
+				// Caller cancellation is not provider failure. Preserve the normal
+				// error/refund cleanup without cooldown or another upstream turn.
+				break
+			}
 
 			processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 
@@ -399,6 +404,9 @@ func maxRelayChannelSelectionCycles(c *gin.Context, info *relaycommon.RelayInfo)
 }
 
 func shouldStartNextRelayChannelSelectionCycle(c *gin.Context, info *relaycommon.RelayInfo, err *types.NewAPIError, cycle int) bool {
+	if info.IsOuterToolsStream() && c != nil && c.Request != nil && c.Request.Context().Err() != nil {
+		return false
+	}
 	if cycle+1 >= maxRelayChannelSelectionCycles(c, info) {
 		return false
 	}
