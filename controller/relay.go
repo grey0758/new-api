@@ -373,6 +373,28 @@ var upgrader = websocket.Upgrader{
 
 const relayChannelSelectionCycles = 2
 
+const unsupportedChannelEndpointCode types.ErrorCode = "unsupported_channel_endpoint"
+
+func isOuterToolsChannel(channel *model.Channel) bool {
+	if channel == nil {
+		return false
+	}
+	return strings.HasSuffix(
+		strings.TrimRight(strings.TrimSpace(channel.GetBaseURL()), "/"),
+		"/outer-tools",
+	)
+}
+
+func unsupportedChannelEndpointError() *types.NewAPIError {
+	return types.NewErrorWithStatusCode(
+		errors.New("the selected outer-tools channel supports /v1/responses only"),
+		unsupportedChannelEndpointCode,
+		http.StatusBadRequest,
+		types.ErrOptionWithSkipRetry(),
+		types.ErrOptionWithPreserveUserError(),
+	)
+}
+
 func maxRelayChannelSelectionCycles(c *gin.Context, info *relaycommon.RelayInfo) int {
 	if c == nil || info == nil || info.ChannelMeta == nil {
 		return 1
@@ -458,6 +480,24 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 			AutoBan: &autoBanInt,
 		}, nil
 	}
+	unsupportedEndpointSeen := false
+	originalChannelFilter := retryParam.ChannelFilter
+	if info.RelayFormat == types.RelayFormatOpenAI {
+		retryParam.ChannelFilter = func(channel *model.Channel) bool {
+			if isOuterToolsChannel(channel) {
+				unsupportedEndpointSeen = true
+				return false
+			}
+			if originalChannelFilter != nil && !originalChannelFilter(channel) {
+				return false
+			}
+			return true
+		}
+		defer func() {
+			retryParam.ChannelFilter = originalChannelFilter
+		}()
+	}
+
 	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
 
 	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
@@ -466,6 +506,9 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, info.OriginModelName, err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 	if channel == nil {
+		if unsupportedEndpointSeen {
+			return nil, unsupportedChannelEndpointError()
+		}
 		return nil, types.NewError(fmt.Errorf("分组 %s 下模型 %s 的可用渠道不存在（retry）", selectGroup, info.OriginModelName), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 

@@ -196,6 +196,7 @@ func IsClientRequestValidationError(err *types.NewAPIError) bool {
 		return true
 	}
 	clientValidationCodes := []string{
+		"unsupported_channel_endpoint",
 		"duplicate_tool_output",
 		"missing_tool_output",
 		"invalid_tool_output",

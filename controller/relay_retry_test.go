@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
@@ -34,6 +35,24 @@ func TestRelaySkipRetryErrorReturnsDirectly(t *testing.T) {
 	err := types.NewErrorWithStatusCode(errors.New("bad request"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 
 	require.False(t, shouldRetry(c, err, 1, 7))
+}
+
+func TestOuterToolsChatEndpointIsClientError(t *testing.T) {
+	err := unsupportedChannelEndpointError()
+
+	require.Equal(t, types.ErrorCode("unsupported_channel_endpoint"), err.GetErrorCode())
+	require.Equal(t, http.StatusBadRequest, err.StatusCode)
+	require.True(t, types.IsSkipRetryError(err))
+	require.True(t, types.ShouldPreserveUserError(err))
+	require.True(t, service.IsClientRequestValidationError(err))
+}
+
+func TestOuterToolsChannelDetectionTrimsTrailingSlash(t *testing.T) {
+	baseURL := " http://10.253.0.1:18789/outer-tools/ "
+	channel := &model.Channel{BaseURL: &baseURL}
+
+	require.True(t, isOuterToolsChannel(channel))
+	require.False(t, isOuterToolsChannel(nil))
 }
 
 func TestRejectOversizedResponsesCompactionBeforeBodyRead(t *testing.T) {
