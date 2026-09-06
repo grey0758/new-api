@@ -51,8 +51,8 @@ func TestOuterToolsChannelDetectionTrimsTrailingSlash(t *testing.T) {
 	baseURL := " http://10.253.0.1:18789/outer-tools/ "
 	channel := &model.Channel{BaseURL: &baseURL}
 
-	require.True(t, isOuterToolsChannel(channel))
-	require.False(t, isOuterToolsChannel(nil))
+	require.True(t, service.IsOuterToolsChannel(channel))
+	require.False(t, service.IsOuterToolsChannel(nil))
 }
 
 func TestRejectOversizedResponsesCompactionBeforeBodyRead(t *testing.T) {

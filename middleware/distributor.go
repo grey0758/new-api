@@ -27,9 +27,40 @@ type ModelRequest struct {
 	Group string `json:"group,omitempty"`
 }
 
+const unsupportedChannelEndpointCode types.ErrorCode = "unsupported_channel_endpoint"
+
+func requiresOpenAICompatibleNonResponsesEndpoint(path string) bool {
+	switch path {
+	case "/v1/completions", "/v1/chat/completions", "/v1/moderations", "/pg/chat/completions":
+		return true
+	default:
+		return false
+	}
+}
+
+func channelAllowedForDistribution(path string, channel *model.Channel, unsupportedSeen *bool) bool {
+	if !requiresOpenAICompatibleNonResponsesEndpoint(path) || !service.IsOuterToolsChannel(channel) {
+		return true
+	}
+	if unsupportedSeen != nil {
+		*unsupportedSeen = true
+	}
+	return false
+}
+
+func abortUnsupportedChannelEndpoint(c *gin.Context) {
+	abortWithOpenAiMessage(
+		c,
+		http.StatusBadRequest,
+		service.OuterToolsResponsesOnlyMessage,
+		unsupportedChannelEndpointCode,
+	)
+}
+
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		var channel *model.Channel
+		unsupportedEndpointSeen := false
 		channelId, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId)
 		modelRequest, shouldSelectChannel, err := getModelRequest(c)
 		if err != nil {
@@ -49,6 +80,10 @@ func Distribute() func(c *gin.Context) {
 			}
 			if channel.Status != common.ChannelStatusEnabled {
 				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
+				return
+			}
+			if !channelAllowedForDistribution(c.Request.URL.Path, channel, &unsupportedEndpointSeen) {
+				abortUnsupportedChannelEndpoint(c)
 				return
 			}
 		} else {
@@ -113,6 +148,8 @@ func Distribute() func(c *gin.Context) {
 							service.ClearCurrentChannelAffinity(c)
 						} else if service.IsChannelCoolingDown(preferred.Id) {
 							service.ClearCurrentChannelAffinity(c)
+						} else if !channelAllowedForDistribution(c.Request.URL.Path, preferred, &unsupportedEndpointSeen) {
+							channel = nil
 						} else if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 							autoGroups := service.GetUserAutoGroup(userGroup)
@@ -148,6 +185,9 @@ func Distribute() func(c *gin.Context) {
 						TokenGroup:         usingGroup,
 						Retry:              common.GetPointer(0),
 						ExcludedChannelIds: excludedChannelIds,
+						ChannelFilter: func(candidate *model.Channel) bool {
+							return channelAllowedForDistribution(c.Request.URL.Path, candidate, &unsupportedEndpointSeen)
+						},
 					})
 					if err == nil && channel == nil {
 						if baseModel, compact := responsesCompactBaseModel(c.Request.URL.Path, modelRequest.Model); compact {
@@ -178,6 +218,10 @@ func Distribute() func(c *gin.Context) {
 						return
 					}
 					if channel == nil {
+						if unsupportedEndpointSeen {
+							abortUnsupportedChannelEndpoint(c)
+							return
+						}
 						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": usingGroup, "Model": modelRequest.Model}), types.ErrorCodeModelNotFound)
 						return
 					}

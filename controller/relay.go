@@ -375,19 +375,9 @@ const relayChannelSelectionCycles = 2
 
 const unsupportedChannelEndpointCode types.ErrorCode = "unsupported_channel_endpoint"
 
-func isOuterToolsChannel(channel *model.Channel) bool {
-	if channel == nil {
-		return false
-	}
-	return strings.HasSuffix(
-		strings.TrimRight(strings.TrimSpace(channel.GetBaseURL()), "/"),
-		"/outer-tools",
-	)
-}
-
 func unsupportedChannelEndpointError() *types.NewAPIError {
 	return types.NewErrorWithStatusCode(
-		errors.New("the selected outer-tools channel supports /v1/responses only"),
+		errors.New(service.OuterToolsResponsesOnlyMessage),
 		unsupportedChannelEndpointCode,
 		http.StatusBadRequest,
 		types.ErrOptionWithSkipRetry(),
@@ -484,7 +474,7 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	originalChannelFilter := retryParam.ChannelFilter
 	if info.RelayFormat == types.RelayFormatOpenAI {
 		retryParam.ChannelFilter = func(channel *model.Channel) bool {
-			if isOuterToolsChannel(channel) {
+			if service.IsOuterToolsChannel(channel) {
 				unsupportedEndpointSeen = true
 				return false
 			}

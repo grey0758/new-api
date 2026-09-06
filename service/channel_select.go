@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -10,6 +11,18 @@ import (
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/gin-gonic/gin"
 )
+
+const OuterToolsResponsesOnlyMessage = "the selected outer-tools channel supports /v1/responses only"
+
+func IsOuterToolsChannel(channel *model.Channel) bool {
+	if channel == nil {
+		return false
+	}
+	return strings.HasSuffix(
+		strings.TrimRight(strings.TrimSpace(channel.GetBaseURL()), "/"),
+		"/outer-tools",
+	)
+}
 
 type RetryParam struct {
 	Ctx                *gin.Context
