@@ -468,6 +468,65 @@ func TestTransientProviderCooldownDoesNotTriggerChannelCooldown(t *testing.T) {
 	require.False(t, IsChannelCoolingDown(30))
 }
 
+func TestBridgeRelayIdentityFailuresDoNotTriggerChannelCooldown(t *testing.T) {
+	originalEnabled := common.AutomaticChannelCooldownEnabled
+	originalRedisEnabled := common.RedisEnabled
+	originalThreshold := common.ChannelCooldownFailureThreshold
+	originalWindow := common.ChannelCooldownFailureWindowSeconds
+	originalCooldown := common.ChannelCooldownSeconds
+	t.Cleanup(func() {
+		common.AutomaticChannelCooldownEnabled = originalEnabled
+		common.RedisEnabled = originalRedisEnabled
+		common.ChannelCooldownFailureThreshold = originalThreshold
+		common.ChannelCooldownFailureWindowSeconds = originalWindow
+		common.ChannelCooldownSeconds = originalCooldown
+		channelCooldownMu.Lock()
+		channelCooldownLocal = map[int]channelCooldownEntry{}
+		channelCooldownMu.Unlock()
+	})
+
+	common.AutomaticChannelCooldownEnabled = true
+	common.RedisEnabled = false
+	common.ChannelCooldownFailureThreshold = 1
+	common.ChannelCooldownFailureWindowSeconds = 60
+	common.ChannelCooldownSeconds = 300
+
+	cases := []struct {
+		name       string
+		code       string
+		message    string
+		statusCode int
+	}{
+		{name: "bound shard cooldown", code: "relay_shard_cooldown", message: "The bound relay identity is cooling down", statusCode: http.StatusServiceUnavailable},
+		{name: "pool unavailable", code: "relay_pool_unavailable", message: "No relay identity is schedulable", statusCode: http.StatusServiceUnavailable},
+		{name: "transport failed", code: "us003_transport_failed", message: "us003 SSH transport failed", statusCode: http.StatusBadGateway},
+		{name: "transport unavailable", code: "us003_transport_unavailable", message: "us003 SSH transport failed", statusCode: http.StatusBadGateway},
+		{name: "codex turn failed", code: "codex_failed", message: "Codex app-server turn failed", statusCode: http.StatusBadGateway},
+		{name: "codex turn timeout", code: "codex_timeout", message: "Codex app-server turn timed out", statusCode: http.StatusGatewayTimeout},
+	}
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := types.NewErrorWithStatusCode(
+				errors.New(tc.message),
+				types.ErrorCodeBadResponseStatusCode,
+				tc.statusCode,
+			)
+			err.RelayError = types.OpenAIError{
+				Message: tc.message,
+				Type:    "upstream_error",
+				Code:    tc.code,
+			}
+			channelError := *types.NewChannelError(130+i, 1, "outer-tools-bridge", false, "", true)
+
+			require.True(t, IsTransientProviderCooldownError(err))
+			require.True(t, IsTransientRelayFailoverError(err))
+			RecordChannelFailureForCooldown(channelError, err)
+			require.False(t, IsChannelCoolingDown(channelError.ChannelId))
+		})
+	}
+}
+
 func TestTooManyRequestsDoesNotTriggerChannelCooldown(t *testing.T) {
 	originalEnabled := common.AutomaticChannelCooldownEnabled
 	originalRedisEnabled := common.RedisEnabled

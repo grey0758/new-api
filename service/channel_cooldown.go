@@ -325,7 +325,31 @@ func IsTransientProviderCooldownError(err *types.NewAPIError) bool {
 		return false
 	}
 	lowerMessage := strings.ToLower(err.Error())
+	lowerCode := strings.ToLower(string(err.GetErrorCode()))
+	if openAIErr, ok := err.RelayError.(types.OpenAIError); ok {
+		lowerMessage += " " + strings.ToLower(openAIErr.Message)
+		lowerCode += " " + strings.ToLower(fmt.Sprintf("%v", openAIErr.Code))
+	}
+	// The private outer-tools bridge already applies a bounded cooldown to the
+	// exact relay identity that failed. Counting those account-local failures
+	// again at the NewAPI channel layer turns a 30-second shard recovery into a
+	// five-minute outage for every identity behind the channel.
+	for _, code := range []string{
+		"relay_shard_cooldown",
+		"relay_pool_unavailable",
+		"us003_transport_failed",
+		"us003_transport_unavailable",
+		"codex_failed",
+		"codex_timeout",
+	} {
+		if strings.Contains(lowerCode, code) {
+			return true
+		}
+	}
 	if strings.Contains(lowerMessage, "cooling down") && strings.Contains(lowerMessage, "credential") {
+		return true
+	}
+	if strings.Contains(lowerMessage, "relay identity") && strings.Contains(lowerMessage, "cooling down") {
 		return true
 	}
 	if strings.Contains(lowerMessage, "rate limit") && (strings.Contains(lowerMessage, "cooldown") || strings.Contains(lowerMessage, "retry")) {
