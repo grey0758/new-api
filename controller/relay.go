@@ -828,6 +828,8 @@ func RelayTask(c *gin.Context) {
 const relayUserVisibleChannelErrorMessage = "号池额度已耗尽正在切换号池，请重试"
 
 var outerToolClientStateMessages = map[types.ErrorCode]string{
+	types.ErrorCode("outer_tool_turn_terminated"):   "The previous outer-tool turn has ended; send a new complete user turn. Do not resend tool outputs.",
+	types.ErrorCode("bound_account_unavailable"):    "The account bound to this session is unavailable. The request was not migrated or replayed; retry only after this account recovers.",
 	types.ErrorCode("duplicate_tool_output"):        "The outer-tool continuation already contains an output for this call.",
 	types.ErrorCode("invalid_tool_output"):          "The outer-tool continuation contains an invalid tool output.",
 	types.ErrorCode("prompt_cache_key_required"):    "A prompt cache key is required when outer tools are used.",
@@ -872,7 +874,11 @@ func sanitizeRelayErrorForUser(c *gin.Context, err *types.NewAPIError) *types.Ne
 	}
 	if code, ok := outerToolClientStateCode(err); ok {
 		message := outerToolClientStateMessages[code]
-		if err.StatusCode >= http.StatusBadRequest && err.StatusCode < http.StatusInternalServerError {
+		validStatus := err.StatusCode >= http.StatusBadRequest && err.StatusCode < http.StatusInternalServerError
+		if code == "outer_tool_turn_terminated" || code == "bound_account_unavailable" {
+			validStatus = err.StatusCode == http.StatusBadRequest
+		}
+		if validStatus {
 			return types.NewErrorWithStatusCode(
 				errors.New(message),
 				code,

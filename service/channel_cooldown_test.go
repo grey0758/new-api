@@ -46,6 +46,22 @@ func TestRecordChannelFailureForCooldownLocal(t *testing.T) {
 	require.True(t, IsChannelCoolingDown(9))
 }
 
+func TestTerminalRecoveryErrorsDoNotRecordChannelFailure(t *testing.T) {
+	original := common.AutomaticChannelCooldownEnabled
+	common.AutomaticChannelCooldownEnabled = true
+	t.Cleanup(func() { common.AutomaticChannelCooldownEnabled = original })
+	channel := *types.NewChannelError(68, 1, "bridge", false, "", true)
+	for _, code := range []string{"outer_tool_turn_terminated", "bound_account_unavailable"} {
+		t.Run(code, func(t *testing.T) {
+			err := types.WithOpenAIError(types.OpenAIError{
+				Message: "session cannot continue", Type: "invalid_request_error", Code: code,
+			}, http.StatusBadRequest)
+			require.True(t, IsClientRequestValidationError(err))
+			require.False(t, shouldRecordChannelFailureForCooldown(channel, err))
+		})
+	}
+}
+
 func TestSingleActorFailuresDoNotTriggerChannelCooldown(t *testing.T) {
 	originalEnabled := common.AutomaticChannelCooldownEnabled
 	originalRedisEnabled := common.RedisEnabled

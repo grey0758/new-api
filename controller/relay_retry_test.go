@@ -368,6 +368,32 @@ func TestSanitizeRelayErrorForUserStillHidesUnknownMapped400(t *testing.T) {
 	require.NotContains(t, sanitized.ToOpenAIError().Message, "unknown provider")
 }
 
+func TestSanitizeRelayErrorForUserPreservesTerminalRecovery(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, code := range []string{"outer_tool_turn_terminated", "bound_account_unavailable"} {
+		t.Run(code, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Set("relay_channel_error_seen", true)
+			err := types.WithOpenAIError(types.OpenAIError{
+				Message: "private account and RPC details", Type: "invalid_request_error", Code: code,
+			}, http.StatusBadRequest)
+			require.False(t, shouldRetry(c, err, 3, 68))
+			sanitized := sanitizeRelayErrorForUser(c, err)
+			require.Equal(t, http.StatusBadRequest, sanitized.StatusCode)
+			require.Equal(t, types.ErrorCode(code), sanitized.ToOpenAIError().Code)
+			require.Equal(t, outerToolClientStateMessages[types.ErrorCode(code)], sanitized.ToOpenAIError().Message)
+			require.NotContains(t, sanitized.Error(), "private")
+			require.True(t, types.IsSkipRetryError(sanitized))
+			require.False(t, shouldRetry(c, sanitized, 3, 68))
+			// Other provider statuses must still use the generic provider error.
+			for _, status := range []int{http.StatusUnauthorized, http.StatusTooManyRequests, http.StatusInternalServerError} {
+				err.StatusCode = status
+				require.Equal(t, types.ErrorCodeBadResponseStatusCode, sanitizeRelayErrorForUser(c, err).GetErrorCode())
+			}
+		})
+	}
+}
+
 func TestSanitizeRelayErrorForUserKeepsProviderPolicyViolation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
