@@ -20,6 +20,40 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// flow2APIStreamError converts Flow2API's JSON error envelope, which can be
+// delivered inside an HTTP-200 SSE stream, into a real NewAPI error.  A
+// streamed error must never fall through as an empty successful completion.
+func flow2APIStreamError(line string) *types.NewAPIError {
+	var envelope struct {
+		Error struct {
+			Message    string `json:"message"`
+			Type       string `json:"type"`
+			Code       any    `json:"code"`
+			StatusCode int    `json:"status_code"`
+		} `json:"error"`
+	}
+	if err := common.UnmarshalJsonStr(line, &envelope); err != nil || strings.TrimSpace(envelope.Error.Message) == "" {
+		return nil
+	}
+	statusCode := envelope.Error.StatusCode
+	if statusCode < 400 {
+		statusCode = http.StatusBadGateway
+	}
+	errorType := envelope.Error.Type
+	if errorType == "" {
+		errorType = "upstream_error"
+	}
+	code := envelope.Error.Code
+	if code == nil {
+		code = "upstream_error"
+	}
+	return types.WithOpenAIError(types.OpenAIError{
+		Message: envelope.Error.Message,
+		Type:    errorType,
+		Code:    code,
+	}, statusCode)
+}
+
 func responsesStreamIndexKey(itemID string, idx *int) string {
 	if itemID == "" {
 		return ""
@@ -248,6 +282,9 @@ func OaiResponsesStreamToChatHandler(c *gin.Context, info *relaycommon.RelayInfo
 		if strings.HasPrefix(line, "[DONE]") {
 			break
 		}
+		if streamErr := flow2APIStreamError(line); streamErr != nil {
+			return nil, streamErr
+		}
 
 		var streamResp dto.ResponsesStreamResponse
 		if err := common.UnmarshalJsonStr(line, &streamResp); err == nil && streamResp.Type != "" {
@@ -373,6 +410,13 @@ func OaiResponsesStreamToChatHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 	if err := scanner.Err(); err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
+	}
+	if outputText.Len() == 0 && len(toolCalls) == 0 {
+		return nil, types.NewErrorWithStatusCode(
+			fmt.Errorf("upstream stream returned no content"),
+			types.ErrorCodeEmptyResponse,
+			http.StatusBadGateway,
+		)
 	}
 
 	if usage.TotalTokens == 0 {
@@ -636,6 +680,12 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			return
 		}
 
+		if parsedErr := flow2APIStreamError(data); parsedErr != nil {
+			streamErr = parsedErr
+			sr.Stop(streamErr)
+			return
+		}
+
 		var streamResp dto.ResponsesStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResp); err != nil {
 			logger.LogError(c, "failed to unmarshal responses stream event: "+err.Error())
@@ -841,6 +891,13 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 	if streamErr != nil {
 		return nil, streamErr
+	}
+	if outputText.Len() == 0 && !sawToolCall {
+		return nil, types.NewErrorWithStatusCode(
+			fmt.Errorf("upstream stream returned no content"),
+			types.ErrorCodeEmptyResponse,
+			http.StatusBadGateway,
+		)
 	}
 
 	if usage.TotalTokens == 0 {
