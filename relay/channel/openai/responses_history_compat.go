@@ -15,7 +15,7 @@ import (
 )
 
 // PrepareResponsesHistoryBody handles the Krill Codex validator's rejection of
-// legacy fc_ item IDs on custom_tool_call history. The Responses input schema
+// legacy fc_/fco_ item IDs on custom tool call/output history. The input schema
 // makes this item ID optional; call_id is the tool-result correlation identity.
 // Only the outbound, explicitly stateless request is changed. Never rewrite
 // call_id, outputs, stored-response references, or the caller's retained history.
@@ -84,14 +84,30 @@ func normalizeKrillCustomToolHistory(raw []byte) ([]byte, error) {
 	normalized := raw
 	for index, item := range items {
 		id := item.Get("id")
-		if item.Get("type").String() != "custom_tool_call" || id.Type != gjson.String || !strings.HasPrefix(id.Str, "fc_") || len(id.Str) <= 3 {
+		kind := item.Get("type").String()
+		legacyPrefix := ""
+		switch kind {
+		case "custom_tool_call":
+			legacyPrefix = "fc_"
+		case "custom_tool_call_output":
+			legacyPrefix = "fco_"
+		default:
+			continue
+		}
+		if id.Type != gjson.String || !strings.HasPrefix(id.Str, legacyPrefix) || len(id.Str) <= len(legacyPrefix) {
 			continue
 		}
 		// Leave malformed/ambiguous records for normal upstream validation.
 		if counts[id.Str] != 1 || references[id.Str] {
 			continue
 		}
-		if item.Get("call_id").Type != gjson.String || item.Get("call_id").Str == "" || item.Get("name").Type != gjson.String || item.Get("name").Str == "" || item.Get("input").Type != gjson.String {
+		if item.Get("call_id").Type != gjson.String || item.Get("call_id").Str == "" {
+			continue
+		}
+		if kind == "custom_tool_call" && (item.Get("name").Type != gjson.String || item.Get("name").Str == "" || item.Get("input").Type != gjson.String) {
+			continue
+		}
+		if kind == "custom_tool_call_output" && item.Get("output").Type != gjson.String && !item.Get("output").IsArray() {
 			continue
 		}
 		var err error

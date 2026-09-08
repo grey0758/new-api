@@ -97,3 +97,36 @@ func TestKrillCustomHistoryDoesNotChangeLinkedOrAmbiguousRecords(t *testing.T) {
 		})
 	}
 }
+
+func TestKrillCustomOutputLegacyIDPreservesResultAndCorrelation(t *testing.T) {
+	for _, output := range []string{`"completed result"`, `[{"type":"input_text","text":"completed result"},{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]`} {
+		raw := []byte(`{"store":false,"input":[{"type":"custom_tool_call","id":"fc_old","call_id":"call_original","name":"exec","input":"historical"},{"type":"custom_tool_call_output","id":"fco_old","call_id":"call_original","output":` + output + `}]}`)
+		got, err := normalizeKrillCustomToolHistory(raw)
+		require.NoError(t, err)
+		expected, err := sjson.DeleteBytes(raw, "input.0.id")
+		require.NoError(t, err)
+		expected, err = sjson.DeleteBytes(expected, "input.1.id")
+		require.NoError(t, err)
+		require.Equal(t, expected, got)
+		require.Equal(t, output, gjson.GetBytes(got, "input.1.output").Raw)
+		require.Equal(t, "call_original", gjson.GetBytes(got, "input.1.call_id").String())
+	}
+}
+
+func TestKrillCustomOutputLeavesUnsupportedOrReferencedRecords(t *testing.T) {
+	for name, item := range map[string]string{
+		"correct":        `{"type":"custom_tool_call_output","id":"ctco_old","call_id":"call_original","output":"done"}`,
+		"function":       `{"type":"function_call_output","id":"fco_old","call_id":"call_original","output":"done"}`,
+		"missing_call":   `{"type":"custom_tool_call_output","id":"fco_old","output":"done"}`,
+		"missing_output": `{"type":"custom_tool_call_output","id":"fco_old","call_id":"call_original"}`,
+		"invalid_output": `{"type":"custom_tool_call_output","id":"fco_old","call_id":"call_original","output":false}`,
+		"referenced":     `{"type":"custom_tool_call_output","id":"fco_old","call_id":"call_original","output":"done"},{"type":"item_reference","id":"fco_old"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw := []byte(`{"store":false,"input":[` + item + `]}`)
+			got, err := normalizeKrillCustomToolHistory(raw)
+			require.NoError(t, err)
+			require.Equal(t, raw, got)
+		})
+	}
+}
