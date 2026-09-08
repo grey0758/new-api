@@ -85,7 +85,7 @@ func TestBuildGrokVideoRequestBodyNormalizesCurrentVideoShape(t *testing.T) {
 
 	url, err := adaptor.BuildRequestURL(info)
 	require.NoError(t, err)
-	require.Equal(t, "https://video.example.com/v1/videos/generations", url)
+	require.Equal(t, "https://video.example.com/v1/videos", url)
 }
 
 func TestGrokVideoSubmitAndPollResponses(t *testing.T) {

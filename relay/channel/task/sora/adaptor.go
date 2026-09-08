@@ -144,7 +144,7 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 
 func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	if a.isGrokVideoAPI() {
-		return strings.TrimRight(a.baseURL, "/") + "/v1/videos/generations", nil
+		return strings.TrimRight(a.baseURL, "/") + "/v1/videos", nil
 	}
 	if info.Action == constant.TaskActionRemix {
 		return fmt.Sprintf("%s/v1/videos/%s/remix", a.baseURL, info.OriginTaskID), nil
@@ -157,6 +157,7 @@ func (a *TaskAdaptor) BuildRequestHeader(c *gin.Context, req *http.Request, info
 	req.Header.Set("Authorization", "Bearer "+a.apiKey)
 	if a.isGrokVideoAPI() {
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "OpenAI-Compatible-Client/1.0")
 		return nil
 	}
 	req.Header.Set("Content-Type", c.Request.Header.Get("Content-Type"))

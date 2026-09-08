@@ -66,6 +66,13 @@ func isGrsaiImageBaseURL(info *relaycommon.RelayInfo) bool {
 		strings.Contains(baseURL, "host.docker.internal:39001")
 }
 
+func isKrillBaseURL(info *relaycommon.RelayInfo) bool {
+	if info == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(strings.TrimSpace(info.ChannelBaseUrl)), "krill-ai.net")
+}
+
 func shouldNormalizeResponsesRequestArguments(info *relaycommon.RelayInfo) bool {
 	if info == nil {
 		return false
@@ -244,6 +251,9 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, header)
+	if isKrillBaseURL(info) {
+		header.Set("User-Agent", "OpenAI-Compatible-Client/1.0")
+	}
 	if info.ChannelType == constant.ChannelTypeAzure {
 		header.Set("api-key", info.ApiKey)
 		return nil

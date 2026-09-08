@@ -27,6 +27,23 @@ func TestGrsaiImageErrorPreservesProviderResponse(t *testing.T) {
 	require.True(t, types.ShouldPreserveUserError(err))
 }
 
+func TestKrillSetupRequestHeaderUsesCompatibilityUserAgent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeImagesGenerations,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelBaseUrl: "https://api.krill-ai.net",
+			ApiKey:         "test-key",
+		},
+	}
+	header := make(http.Header)
+	require.NoError(t, (&Adaptor{}).SetupRequestHeader(ctx, &header, info))
+	require.Equal(t, "OpenAI-Compatible-Client/1.0", header.Get("User-Agent"))
+	require.Equal(t, "Bearer test-key", header.Get("Authorization"))
+}
+
 func TestGrsaiImageFailed200PreservesProviderResponse(t *testing.T) {
 	err := newGrsaiImageError(
 		[]byte(`{"status":"failed","error":{"code":"insufficient_credits","type":"provider_error","message":"insufficient credits"}}`),
