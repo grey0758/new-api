@@ -182,6 +182,20 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				sr.Stop(streamErr)
 				return
 			}
+			if service.IsResponsesHistoryIDError(streamErr) && streamResponse.Response != nil {
+				// Headers are committed: use the native client's non-retryable
+				// SSE classification, retaining the specific cause in metadata.
+				upstream := streamErr.ToOpenAIError()
+				upstream.Code = "invalid_prompt"
+				upstream.Metadata = []byte(`{"original_code":"invalid_id_prefix"}`)
+				streamResponse.Response.Error = upstream
+				encoded, encodeErr := common.Marshal(streamResponse)
+				if encodeErr != nil {
+					sr.Stop(streamErr)
+					return
+				}
+				data = string(encoded)
+			}
 			sendResponsesStreamData(c, info, streamResponse, data)
 			sr.Stop(streamErr)
 			return
@@ -213,7 +227,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		logger.LogError(c, streamErr.Error())
 	}
 
-	if !completed && !(info.IsOuterToolsStream() && c.Request.Context().Err() != nil) {
+	if !completed && (streamErr == nil || shouldFailoverResponsesStreamFatalError(streamErr)) && !(info.IsOuterToolsStream() && c.Request.Context().Err() != nil) {
 		err := fmt.Errorf("responses stream closed before response.completed: end=%s received=%d sent=%d", info.StreamStatus.Summary(), info.ReceivedResponseCount, info.SendResponseCount)
 		service.RecordResponsesStreamFailover(c, modelName, channelID)
 		service.RecordResponsesStreamGuard(c, modelName)
@@ -267,6 +281,9 @@ func responsesStreamFatalEventNewAPIError(streamResponse dto.ResponsesStreamResp
 	if streamResponse.Response != nil {
 		if oaiErr := streamResponse.Response.GetOpenAIError(); oaiErr != nil {
 			candidate := types.WithOpenAIError(*oaiErr, http.StatusServiceUnavailable)
+			if service.IsResponsesHistoryIDError(candidate) {
+				return service.NormalizeResponsesHistoryIDError(candidate)
+			}
 			if service.IsRequestScopedUpstreamRejectionError(candidate) {
 				statusCode := http.StatusBadRequest
 				if strings.Contains(strings.ToLower(fmt.Sprintf("%v", oaiErr.Code)), "cyber_policy") {

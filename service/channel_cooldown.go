@@ -184,6 +184,9 @@ func IsClientRequestValidationError(err *types.NewAPIError) bool {
 	if err == nil {
 		return false
 	}
+	if IsResponsesHistoryIDError(err) {
+		return true
+	}
 	lowerMessage := strings.ToLower(err.Error())
 	lowerCode := strings.ToLower(string(err.GetErrorCode()))
 	lowerType := strings.ToLower(string(err.GetErrorType()))
@@ -238,6 +241,9 @@ func IsClientRequestValidationError(err *types.NewAPIError) bool {
 func IsRequestScopedUpstreamRejectionError(err *types.NewAPIError) bool {
 	if err == nil {
 		return false
+	}
+	if IsResponsesHistoryIDError(err) {
+		return true
 	}
 	lowerMessage := strings.ToLower(err.Error())
 	lowerCode := strings.ToLower(string(err.GetErrorCode()))

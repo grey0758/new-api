@@ -339,6 +339,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				return
 			}
 
+			newAPIError = service.NormalizeResponsesHistoryIDError(newAPIError)
 			newAPIError = service.NormalizeViolationFeeError(newAPIError)
 			relayInfo.LastError = newAPIError
 			if relayInfo.IsOuterToolsStream() && c.Request.Context().Err() != nil {
