@@ -75,7 +75,7 @@ var (
 )
 
 const channelCooldownProbeRecentErrorWindow = time.Hour
-const channelCooldownProbeModel = "gpt-5.5"
+const channelCooldownProbeModel = "gpt-5.6-sol"
 
 const (
 	ChannelCooldownProbeEndpoint = "/v1/responses"
