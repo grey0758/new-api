@@ -37,6 +37,77 @@ func TestRelaySkipRetryErrorReturnsDirectly(t *testing.T) {
 	require.False(t, shouldRetry(c, err, 1, 7))
 }
 
+func TestPreserveChannelClientValidationErrorOptIn(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelSetting: dto.ChannelSettings{PreserveClientValidationErrors: true},
+		},
+	}
+	err := types.WithOpenAIError(types.OpenAIError{
+		Message: "top_p is not supported by this image channel",
+		Type:    "invalid_request_error",
+		Param:   "top_p",
+		Code:    "unsupported_parameter",
+	}, http.StatusBadRequest)
+
+	preserved := preserveChannelClientValidationError(info, err)
+
+	require.Same(t, err, preserved)
+	require.Equal(t, http.StatusBadRequest, preserved.StatusCode)
+	require.Equal(t, types.ErrorCode("unsupported_parameter"), preserved.GetErrorCode())
+	require.True(t, types.IsSkipRetryError(preserved))
+	require.True(t, types.ShouldPreserveUserError(preserved))
+	require.True(t, isPreservedChannelClientValidationError(info, preserved))
+	require.False(t, shouldHideRelayErrorFromUser(ginTestContext(), preserved))
+	require.False(t, shouldRetry(ginTestContext(), preserved, 1, 8))
+}
+
+func TestPreserveChannelClientValidationErrorIsChannelScoped(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelSetting: dto.ChannelSettings{},
+		},
+	}
+	err := types.WithOpenAIError(types.OpenAIError{
+		Message: "top_p is not supported by this image channel",
+		Type:    "invalid_request_error",
+		Param:   "top_p",
+		Code:    "unsupported_parameter",
+	}, http.StatusBadRequest)
+
+	unmodified := preserveChannelClientValidationError(info, err)
+
+	require.Same(t, err, unmodified)
+	require.False(t, isPreservedChannelClientValidationError(info, unmodified))
+	require.False(t, types.IsSkipRetryError(unmodified))
+	require.False(t, types.ShouldPreserveUserError(unmodified))
+}
+
+func TestPreserveChannelClientValidationErrorDoesNotExposeServerFailure(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelSetting: dto.ChannelSettings{PreserveClientValidationErrors: true},
+		},
+	}
+	err := types.WithOpenAIError(types.OpenAIError{
+		Message: "upstream internal failure",
+		Type:    "invalid_request_error",
+		Code:    "unsupported_parameter",
+	}, http.StatusInternalServerError)
+
+	unmodified := preserveChannelClientValidationError(info, err)
+
+	require.Same(t, err, unmodified)
+	require.False(t, isPreservedChannelClientValidationError(info, unmodified))
+	require.False(t, types.IsSkipRetryError(unmodified))
+	require.False(t, types.ShouldPreserveUserError(unmodified))
+}
+
+func ginTestContext() *gin.Context {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	return c
+}
+
 func TestOuterToolsChatEndpointIsClientError(t *testing.T) {
 	err := unsupportedChannelEndpointError()
 

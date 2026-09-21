@@ -341,6 +341,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 			newAPIError = service.NormalizeResponsesHistoryIDError(newAPIError)
 			newAPIError = service.NormalizeViolationFeeError(newAPIError)
+			newAPIError = preserveChannelClientValidationError(relayInfo, newAPIError)
 			relayInfo.LastError = newAPIError
 			if relayInfo.IsOuterToolsStream() && c.Request.Context().Err() != nil {
 				// Caller cancellation is not provider failure. Preserve the normal
@@ -348,7 +349,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				break
 			}
 
-			processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+			// A channel-local, deterministic request validation failure belongs to
+			// the final request log, not the channel health/failover lifecycle.
+			if !isPreservedChannelClientValidationError(relayInfo, newAPIError) {
+				processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+			}
 
 			if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry(), channel.Id) {
 				if shouldStartNextRelayChannelSelectionCycle(c, relayInfo, newAPIError, cycle) {
@@ -368,6 +373,31 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		retryLogStr := fmt.Sprintf("重试：%s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
 		logger.LogInfo(c, retryLogStr)
 	}
+}
+
+// preserveChannelClientValidationError turns a provider-recognized request
+// validation failure into a deterministic client error only when the selected
+// channel opts in.  The setting keeps the behavior scoped: other channels
+// retain the existing retry, health-event, and user-error masking policy.
+func preserveChannelClientValidationError(info *relaycommon.RelayInfo, err *types.NewAPIError) *types.NewAPIError {
+	if !isPreservedChannelClientValidationError(info, err) {
+		return err
+	}
+	return types.NewError(
+		err,
+		err.GetErrorCode(),
+		types.ErrOptionWithSkipRetry(),
+		types.ErrOptionWithPreserveUserError(),
+	)
+}
+
+func isPreservedChannelClientValidationError(info *relaycommon.RelayInfo, err *types.NewAPIError) bool {
+	return info != nil &&
+		info.ChannelSetting.PreserveClientValidationErrors &&
+		err != nil &&
+		err.StatusCode >= http.StatusBadRequest &&
+		err.StatusCode < http.StatusInternalServerError &&
+		service.IsClientRequestValidationError(err)
 }
 
 var upgrader = websocket.Upgrader{

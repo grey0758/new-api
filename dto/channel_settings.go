@@ -7,6 +7,11 @@ type ChannelSettings struct {
 	PassThroughBodyEnabled bool   `json:"pass_through_body_enabled,omitempty"`
 	SystemPrompt           string `json:"system_prompt,omitempty"`
 	SystemPromptOverride   bool   `json:"system_prompt_override,omitempty"`
+	// PreserveClientValidationErrors is intentionally channel-local.  Some
+	// OpenAI-compatible upstreams perform parameter validation that NewAPI
+	// cannot reproduce before conversion; those deterministic 4xx responses
+	// should reach the caller instead of being hidden as a generic 503.
+	PreserveClientValidationErrors bool `json:"preserve_client_validation_errors,omitempty"`
 }
 
 type VertexKeyType string
