@@ -5,11 +5,10 @@ import { API } from '../../helpers';
 import { fetchTokenKey } from '../../helpers/token';
 import {
   buildClaudeInstallCommand,
+  CLAUDE_BASE_URL,
   CLAUDE_DEFAULT_MODEL,
   CLAUDE_MODELS,
   CLAUDE_PLATFORMS,
-  defaultClaudeBaseUrlFromStatus,
-  normalizeClaudeBaseUrl,
 } from './claudeInstallCommandBuilder';
 
 function normalizeApiKey(value) {
@@ -36,39 +35,17 @@ function writeSaved(key, value) {
   }
 }
 
-function uniqueValues(values) {
-  return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
-}
-
 export default function ClaudeInstall() {
   const [loading, setLoading] = useState(true);
   const [loadingDefaultKey, setLoadingDefaultKey] = useState(false);
   const [defaultApiKey, setDefaultApiKey] = useState('');
   const [apiKey, setApiKey] = useState('');
-  const [baseUrl, setBaseUrl] = useState('');
   const [model, setModel] = useState(CLAUDE_DEFAULT_MODEL);
   const [copied, setCopied] = useState(null);
   const [message, setMessage] = useState('');
-  const defaultBaseUrl = useMemo(() => defaultClaudeBaseUrlFromStatus(), []);
-  const baseUrlOptions = useMemo(
-    () =>
-      uniqueValues([
-        defaultBaseUrl,
-        'https://apicc.opencodex.uk',
-        'https://api.opencodex.uk',
-        'https://api.open-codex.com',
-        'https://vip.opencodex.uk',
-      ]).map(normalizeClaudeBaseUrl),
-    [defaultBaseUrl],
-  );
-  const modelOptions = useMemo(() => uniqueValues([...CLAUDE_MODELS, model]), [model]);
-
   useEffect(() => {
-    const savedBaseUrl = readSaved('newapi.claudeInstall.baseUrl');
     const savedModel = readSaved('newapi.claudeInstall.model');
-
-    setBaseUrl(savedBaseUrl || defaultClaudeBaseUrlFromStatus());
-    if (savedModel) {
+    if (CLAUDE_MODELS.includes(savedModel)) {
       setModel(savedModel);
     }
   }, []);
@@ -80,7 +57,7 @@ export default function ClaudeInstall() {
       setLoading(true);
       setLoadingDefaultKey(true);
       try {
-        const response = await API.get('/api/token/?p=1&size=1', {
+        const response = await API.get('/api/token/?p=1&size=1&order=oldest', {
           disableDuplicate: true,
           skipErrorHandler: true,
         });
@@ -128,30 +105,22 @@ export default function ClaudeInstall() {
   }, [apiKey, loading]);
 
   useEffect(() => {
-    if (baseUrl) {
-      writeSaved('newapi.claudeInstall.baseUrl', baseUrl);
-    }
-  }, [baseUrl]);
-
-  useEffect(() => {
     writeSaved('newapi.claudeInstall.model', model);
   }, [model]);
 
-  const normalizedBaseUrl = useMemo(() => normalizeClaudeBaseUrl(baseUrl), [baseUrl]);
   const commandByPlatform = useMemo(
     () =>
       CLAUDE_PLATFORMS.reduce((current, platform) => {
         current[platform.id] = buildClaudeInstallCommand(
           platform.id,
           apiKey,
-          normalizedBaseUrl,
+          CLAUDE_BASE_URL,
           model,
         );
         return current;
       }, {}),
-    [apiKey, model, normalizedBaseUrl],
+    [apiKey, model],
   );
-  const isPresetBaseUrl = Boolean(normalizedBaseUrl) && baseUrlOptions.includes(normalizedBaseUrl);
   const hasSavedApiKey = !loading && readSaved('newapi.claudeInstall.apiKey') !== null;
   const apiKeySourceLabel = hasSavedApiKey
     ? '使用本机保存值'
@@ -208,6 +177,12 @@ export default function ClaudeInstall() {
           <p className='mt-3 max-w-3xl text-sm leading-6 text-[#9fb0c7]'>
             这里单独生成 Claude Code 命令，环境变量写入 Claude 专用配置，不和 Codex 安装命令混在一起。
           </p>
+          <a
+            href='https://docs.opencodex.uk/opencodex/apicc-claude'
+            className='mt-4 inline-block text-sm text-[#38bdf8] hover:text-[#7dd3fc]'
+          >
+            查看 APICC Claude 安装与使用教程
+          </a>
         </section>
 
         {message ? (
@@ -261,75 +236,30 @@ export default function ClaudeInstall() {
               </div>
 
               <div className='space-y-2'>
-                <label className='font-mono text-xs text-[#6f8096]'>模型</label>
-                <div className='grid gap-2 sm:grid-cols-2'>
-                  {modelOptions.map((option) => {
-                    const selected = option === model;
-                    return (
-                      <button
-                        key={option}
-                        type='button'
-                        onClick={() => setModel(option)}
-                        className={`h-11 rounded-lg border px-4 font-mono text-sm transition-colors ${
-                          selected
-                            ? 'border-[#38bdf8]/35 bg-[#38bdf8]/10 text-[#c8ecfb]'
-                            : 'border-white/10 bg-[#0a0d13] text-[#9fb0c7] hover:bg-white/5'
-                        }`}
-                      >
-                        {option}
-                      </button>
-                    );
-                  })}
-                </div>
-                <div className='rounded-lg border border-white/10 bg-[#0a0d13] px-3'>
-                  <input
-                    value={model}
-                    onChange={(event) => setModel(event.target.value)}
-                    placeholder={CLAUDE_DEFAULT_MODEL}
-                    className='install-page-input h-11 w-full bg-transparent font-mono text-sm text-white outline-none placeholder:text-[#506078]'
-                  />
-                </div>
+                <label htmlFor='claude-install-model' className='font-mono text-xs text-[#6f8096]'>
+                  模型
+                </label>
+                <select
+                  id='claude-install-model'
+                  value={model}
+                  onChange={(event) => setModel(event.target.value)}
+                  className='install-page-input h-11 w-full rounded-lg border border-white/10 bg-[#0a0d13] px-3 font-mono text-sm text-white outline-none focus:border-[#38bdf8]/50'
+                >
+                  {CLAUDE_MODELS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 
             <div className='space-y-3'>
-              <div className='flex flex-wrap items-center justify-between gap-2'>
+              <div>
                 <label className='font-mono text-xs text-[#6f8096]'>Anthropic Base URL</label>
-                <span className='break-all text-right font-mono text-xs text-[#6f8096]'>
-                  默认：{defaultBaseUrl}
-                </span>
-              </div>
-              <div className='grid gap-2'>
-                {baseUrlOptions.map((option) => {
-                  const selected = option === normalizedBaseUrl;
-                  return (
-                    <button
-                      key={option}
-                      type='button'
-                      onClick={() => setBaseUrl(option)}
-                      className={`flex min-h-11 items-center rounded-lg border px-4 py-3 text-left font-mono text-sm transition-colors ${
-                        selected
-                          ? 'border-[#38bdf8]/35 bg-[#38bdf8]/10 text-[#c8ecfb]'
-                          : 'border-white/10 bg-[#0a0d13] text-[#9fb0c7] hover:bg-white/5'
-                      }`}
-                    >
-                      {option}
-                    </button>
-                  );
-                })}
-              </div>
-              <div className='space-y-2'>
-                <div className='rounded-lg border border-white/10 bg-[#0a0d13] px-3'>
-                  <input
-                    value={baseUrl}
-                    onChange={(event) => setBaseUrl(event.target.value)}
-                    placeholder={defaultBaseUrl}
-                    className='install-page-input h-11 w-full bg-transparent font-mono text-sm text-white outline-none placeholder:text-[#506078]'
-                  />
+                <div className='mt-2 flex min-h-11 items-center rounded-lg border border-white/10 bg-[#0a0d13] px-3 font-mono text-sm text-white'>
+                  {CLAUDE_BASE_URL}
                 </div>
-                <p className='text-xs text-[#6f8096]'>
-                  {isPresetBaseUrl ? '当前使用预设地址，也可以直接编辑。' : '当前使用自定义 Base URL。'}
-                </p>
               </div>
             </div>
           </div>
@@ -367,7 +297,7 @@ export default function ClaudeInstall() {
                   </button>
                   <div className='rounded-lg border border-white/10 bg-[#090c12] p-4'>
                     <div className='mb-3 break-all font-mono text-[11px] uppercase tracking-[0.24em] text-[#6f8096]'>
-                      model={model} | base={normalizedBaseUrl}
+                      model={model} | base={CLAUDE_BASE_URL}
                     </div>
                     <pre className='max-h-[32rem] overflow-auto whitespace-pre-wrap break-all font-mono text-xs leading-6 text-[#d7e1ee]'>
                       {command}

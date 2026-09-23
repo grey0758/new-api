@@ -1,8 +1,21 @@
 import { Monitor, Terminal } from 'lucide-react';
 
-export const CLAUDE_DEFAULT_MODEL = 'claude-opus-4-7';
+export const CLAUDE_BASE_URL = 'https://apicc.opencodex.uk';
 
-export const CLAUDE_MODELS = [CLAUDE_DEFAULT_MODEL, 'claude-opus-4-8'];
+export const CLAUDE_DEFAULT_MODEL = 'claude-opus-5-5';
+
+export const CLAUDE_MODELS = [
+  'claude-opus-5-5',
+  'claude-fable-5-1',
+  'claude-opus-5',
+  'claude-sonnet-5',
+  'claude-fable-5',
+  'claude-opus-4-8',
+  'claude-opus-4-7',
+  'claude-opus-4-6',
+  'claude-haiku-4-5-20251001',
+  'claude-sonnet-4-6',
+];
 
 export const CLAUDE_PLATFORMS = [
   { id: 'linux', label: 'Linux', icon: Terminal },
