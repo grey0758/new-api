@@ -59,3 +59,12 @@ state only. The R2 bucket and Worker can remain while disconnected.
 The 2026-10-02 20:00 UTC scheduled event completed successfully with `release sync 0.160.0 false`, confirming the hourly check and unchanged-version path.
 
 The new container has restart policy `always`; after the observation window the old 3001 container is stopped. This leaves the new container to acquire the single valid `sgp001-hk002-newapi-mysql` background-task lease. The separate `sgp001-hk002-newapi-3001-mysql` is a different database and must not be used to assess this frontend.
+
+Final cutover at 2026-10-02 20:18 UTC: the old `.09.08.4` container was set to
+restart `no` and stopped after the 30-minute observation window. The new
+container remained running with restart policy `always`, restart count `0`,
+OOM `false`, and acquired the single valid 3001 database lease under hostname
+`91acb2146861`. Public `/api/status` returned the mirror version, anonymous
+`/v1/models` returned `401`, `/install/` served the new asset bundle, and
+`/codex-cache/channels/latest` returned `rust-v0.160.0`. sgp001 Nginx config
+validation passed.
