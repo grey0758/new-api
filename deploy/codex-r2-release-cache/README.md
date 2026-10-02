@@ -52,8 +52,10 @@ native Windows/macOS execution was not available on this Linux operator host.
 For rollback, restore the saved `newapi-3001-front-proxy.conf` to return the
 existing production container on port `50101`, run `nginx -t` and reload.
 Restore the saved `opencodex.uk` vhost to remove `/codex-cache/` if needed.
-The old container and existing database are retained. Do not replace the
+The old container is retained stopped as a rollback target after the observation window; the existing database remains live. Do not replace the
 database with the backup; the backup contains Nginx and container inspection
 state only. The R2 bucket and Worker can remain while disconnected.
 
 The 2026-10-02 20:00 UTC scheduled event completed successfully with `release sync 0.160.0 false`, confirming the hourly check and unchanged-version path.
+
+The new container has restart policy `always`; after the observation window the old 3001 container is stopped. This leaves the new container to acquire the single valid `sgp001-hk002-newapi-mysql` background-task lease. The separate `sgp001-hk002-newapi-3001-mysql` is a different database and must not be used to assess this frontend.
