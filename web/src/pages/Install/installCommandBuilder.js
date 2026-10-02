@@ -1,4 +1,5 @@
 import { Laptop, Monitor, Terminal } from 'lucide-react';
+import { installViaCodexMirror } from './codexMirrorInstaller.js';
 
 export const PLATFORMS = [
   { id: 'linux', label: 'Linux', icon: Terminal },
@@ -620,30 +621,39 @@ export function buildInstallCommand(
     : normalizedConfig.defaultModel;
 
   if (os === 'windows') {
-    return buildWindowsCommand(
+    const command = buildWindowsCommand(
       apiKey,
       codexBaseUrl,
       selectedModel,
       reasoningEffort,
       normalizedConfig,
     );
+    return codexBaseUrl === 'https://api.opencodex.uk/v1'
+      ? installViaCodexMirror(command, os)
+      : command;
   }
 
   if (os === 'macos') {
-    return buildMacosCommand(
+    const command = buildMacosCommand(
       apiKey,
       codexBaseUrl,
       selectedModel,
       reasoningEffort,
       normalizedConfig,
     );
+    return codexBaseUrl === 'https://api.opencodex.uk/v1'
+      ? installViaCodexMirror(command, os)
+      : command;
   }
 
-  return buildLinuxCommand(
+  const command = buildLinuxCommand(
     apiKey,
     codexBaseUrl,
     selectedModel,
     reasoningEffort,
     normalizedConfig,
   );
+  return codexBaseUrl === 'https://api.opencodex.uk/v1'
+    ? installViaCodexMirror(command, 'linux')
+    : command;
 }

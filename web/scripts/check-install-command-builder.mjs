@@ -146,11 +146,20 @@ assert(
   'windows command must not try to escape Windows backslashes in the generated TOML project key',
 );
 assert(
-  windowsCommand.includes('Invoke-CodexNpmInstall') ||
-    windowsCommand.includes('optionalDependencies.$nativeName') ||
-    windowsCommand.includes('codex-win32-x64'),
-  'windows command must include the canonical native optional dependency repair flow',
+  windowsCommand.includes('Get-FileHash -Algorithm SHA256') &&
+    windowsCommand.includes('codex-package-') &&
+    windowsCommand.includes('codex-cache/channels/latest'),
+  'windows command must verify the mirrored official native package',
 );
+
+for (const [platform, command] of [
+  ['linux', linuxCommand],
+  ['macos', macosCommand],
+  ['windows', windowsCommand],
+]) {
+  assert(command.includes('https://api.opencodex.uk/codex-cache/'));
+  assert(!command.includes('npm install -g @openai/codex@latest'));
+}
 
 for (const platform of platforms) {
   for (const effort of ['xhigh', 'max']) {
