@@ -161,6 +161,34 @@ for (const [platform, command] of [
   assert(!command.includes('npm install -g @openai/codex@latest'));
 }
 
+for (const baseUrl of [
+  'https://api.opencodex.uk',
+  'https://api.open-codex.com',
+  'https://api.9gpt.net',
+]) {
+  for (const platform of platforms) {
+    const args = [platform, 'DUMMY_KEY', baseUrl, 'gpt-5.6-sol', 'xhigh'];
+    const defaultCommand = buildInstallCommand(...args);
+    const mirroredCommand = buildInstallCommand(
+      ...args,
+      DEFAULT_INSTALL_COMMAND_CONFIG,
+      'r2',
+    );
+    const officialCommand = buildInstallCommand(
+      ...args,
+      DEFAULT_INSTALL_COMMAND_CONFIG,
+      'official',
+    );
+    assert.equal(defaultCommand, mirroredCommand);
+    assert(mirroredCommand.includes(`${baseUrl}/v1`));
+    assert(officialCommand.includes(`${baseUrl}/v1`));
+    assert(mirroredCommand.includes('https://api.opencodex.uk/codex-cache/'));
+    assert(!mirroredCommand.includes('npm install -g @openai/codex@latest'));
+    assert(!officialCommand.includes('/codex-cache/'));
+    assert(officialCommand.includes('npm install -g @openai/codex@latest'));
+  }
+}
+
 for (const platform of platforms) {
   for (const effort of ['xhigh', 'max']) {
     const command = buildInstallCommand(

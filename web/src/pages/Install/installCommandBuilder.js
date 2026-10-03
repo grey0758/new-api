@@ -613,6 +613,7 @@ export function buildInstallCommand(
   model,
   reasoningEffort = DEFAULT_INSTALL_REASONING_EFFORT,
   config = {},
+  packageSource = 'r2',
 ) {
   const codexBaseUrl = normalizeCodexBaseUrl(baseUrl);
   const normalizedConfig = normalizeInstallCommandConfig(config);
@@ -628,7 +629,7 @@ export function buildInstallCommand(
       reasoningEffort,
       normalizedConfig,
     );
-    return codexBaseUrl === 'https://api.opencodex.uk/v1'
+    return packageSource !== 'official'
       ? installViaCodexMirror(command, os)
       : command;
   }
@@ -641,7 +642,7 @@ export function buildInstallCommand(
       reasoningEffort,
       normalizedConfig,
     );
-    return codexBaseUrl === 'https://api.opencodex.uk/v1'
+    return packageSource !== 'official'
       ? installViaCodexMirror(command, os)
       : command;
   }
@@ -653,7 +654,7 @@ export function buildInstallCommand(
     reasoningEffort,
     normalizedConfig,
   );
-  return codexBaseUrl === 'https://api.opencodex.uk/v1'
+  return packageSource !== 'official'
     ? installViaCodexMirror(command, 'linux')
     : command;
 }

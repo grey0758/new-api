@@ -53,6 +53,7 @@ export default function Install() {
     DEFAULT_INSTALL_REASONING_EFFORT,
   );
   const [platform, setPlatform] = useState('linux');
+  const [packageSource, setPackageSource] = useState('r2');
   const [installCommandConfig, setInstallCommandConfig] = useState(
     DEFAULT_INSTALL_COMMAND_CONFIG,
   );
@@ -74,6 +75,7 @@ export default function Install() {
       'newapi.install.reasoningEffort.v2',
     );
     const savedPlatform = readSaved('newapi.install.platform');
+    const savedPackageSource = readSaved('newapi.install.packageSource');
 
     setBaseUrl(savedBaseUrl || defaultBaseUrlFromStatus());
     if (INSTALL_MODELS.includes(savedModel)) {
@@ -86,6 +88,9 @@ export default function Install() {
     }
     if (PLATFORMS.some((item) => item.id === savedPlatform)) {
       setPlatform(savedPlatform);
+    }
+    if (savedPackageSource === 'official') {
+      setPackageSource('official');
     }
   }, []);
 
@@ -207,6 +212,10 @@ export default function Install() {
     writeSaved('newapi.install.platform', platform);
   }, [platform]);
 
+  useEffect(() => {
+    writeSaved('newapi.install.packageSource', packageSource);
+  }, [packageSource]);
+
   const normalizedBaseUrl = useMemo(
     () => normalizeCodexBaseUrl(baseUrl),
     [baseUrl],
@@ -228,6 +237,7 @@ export default function Install() {
         model,
         reasoningEffort,
         installCommandConfig,
+        packageSource,
       ),
     [
       apiKey,
@@ -235,6 +245,7 @@ export default function Install() {
       model,
       normalizedBaseUrl,
       platform,
+      packageSource,
       reasoningEffort,
     ],
   );
@@ -448,6 +459,34 @@ export default function Install() {
                     ? '当前使用预设地址，也可以直接编辑。'
                     : `当前生成地址：${normalizedBaseUrl}`}
                 </p>
+              </div>
+            </div>
+
+            <div className='space-y-3'>
+              <label className='font-mono text-xs text-[#6f8096]'>Codex 安装包来源</label>
+              <div className='grid gap-2 sm:grid-cols-2'>
+                {[
+                  { id: 'r2', title: 'R2 加速（默认）', description: '从本站 R2 缓存下载，并校验官方发布包。' },
+                  { id: 'official', title: '官方源', description: '使用原来的官方 npm 安装命令。' },
+                ].map((option) => {
+                  const selected = packageSource === option.id;
+                  return (
+                    <button
+                      key={option.id}
+                      type='button'
+                      aria-pressed={selected}
+                      onClick={() => setPackageSource(option.id)}
+                      className={`rounded-lg border px-4 py-3 text-left transition-colors ${
+                        selected
+                          ? 'border-[#00ff88]/35 bg-[#00ff88]/10 text-[#d9ffe9]'
+                          : 'border-white/10 bg-[#0a0d13] text-[#9fb0c7] hover:bg-white/5'
+                      }`}
+                    >
+                      <span className='block text-sm font-semibold'>{option.title}</span>
+                      <span className='mt-1 block text-xs opacity-75'>{option.description}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
