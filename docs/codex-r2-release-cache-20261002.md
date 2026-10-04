@@ -9,6 +9,11 @@ checks all seven R2 object digests even when the official stable version is
 unchanged. It records the last attempt, last success, official version, R2
 version, and any failure at `/codex-cache/sync-status.json`. An incomplete new
 release does not replace the last complete `channels/latest`.
+The 2026-10-04 remote scheduled-event test exposed R2 returning existing
+SHA-256 values as bytes; the Worker now converts them to hex before comparing.
+After the fix, the remote test reported `release sync 0.160.0 false`, and the
+public status endpoint reported `state=ok` with matching official and cached
+versions. Worker deployment version: `2c3171d4-6692-4352-b08c-e3770e49bac1`.
 
 ## Three-site install source selection (2026-10-03 UTC)
 

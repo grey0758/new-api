@@ -25,7 +25,7 @@ function bucket() {
   const object = (entry) => entry && {
     body: entry.bytes,
     text: async () => new TextDecoder().decode(entry.bytes),
-    checksums: { sha256: entry.digest },
+    checksums: { sha256: Buffer.from(entry.digest, 'hex') },
     size: entry.bytes.length,
     httpEtag: '"test"',
     writeHttpMetadata: () => {},

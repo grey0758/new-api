@@ -12,6 +12,15 @@ const REQUIRED = [...PACKAGE_NAMES, 'codex-package_SHA256SUMS'];
 const SHA256 = /^sha256:([a-f0-9]{64})$/i;
 const VERSION = /^rust-v(\d+\.\d+\.\d+(?:-(?:alpha|beta)(?:\.\d+){0,2})?)$/;
 
+function digestHex(value) {
+  if (typeof value === 'string') return value.toLowerCase();
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+    const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  }
+  return null;
+}
+
 async function fetchOfficial(url) {
   const response = await fetch(url, { headers: { 'User-Agent': 'opencodex-codex-release-cache/1' } });
   if (!response.ok || !response.body) throw new Error(`Official source returned ${response.status} for ${new URL(url).pathname}`);
@@ -36,7 +45,7 @@ async function update(env, status = {}) {
     if (!digest) throw new Error(`Missing SHA-256 for ${name}`);
     const key = `releases/${version}/${name}`;
     const existing = await env.PACKAGES.head(key);
-    if (existing?.checksums?.sha256?.toLowerCase() === digest[1].toLowerCase()) continue;
+    if (digestHex(existing?.checksums?.sha256) === digest[1].toLowerCase()) continue;
     changed = true;
     const response = await fetchOfficial(`${UPSTREAM}/${key}`);
     await env.PACKAGES.put(key, response.body, {
