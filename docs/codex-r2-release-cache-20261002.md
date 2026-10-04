@@ -22,6 +22,16 @@ release. The official npm command remains a separate option. Native macOS and
 Windows execution was unavailable on hk003; their generated commands passed
 source checks and the web build.
 
+The first release tags `.1` and `.2` did not publish a production image:
+`.1` failed the install-command assertion after the corrected macOS launch
+path; `.2` passed web and Go checks but its Docker preflight found four HIGH
+findings in Debian's `libpcre2-8-0`. The Debian security package
+`10.42-1+deb12u2` was downloaded from the official Debian security archive,
+checked against SHA-256 `d2f7edfcc7689b9e0761c2742cc824ac86a20768bc5e8057818dc6875291fe76`,
+and added to the final runtime image. A local Trivy scan of that patched
+runtime layer reported zero HIGH/CRITICAL findings. Neither failed tag was
+deployed.
+
 ## Release tracking recheck (2026-10-04 UTC)
 
 The official `releases.openai.com/codex/channels/latest`, npm `latest`, and
