@@ -32,6 +32,26 @@ and added to the final runtime image. A local Trivy scan of that patched
 runtime layer reported zero HIGH/CRITICAL findings. Neither failed tag was
 deployed.
 
+Tag `opencodex-prod-2026.10.04.3` passed web, Go, Docker preflight, image
+scan, Cosign signatures, and SLSA/SPDX attestations. The linux/amd64 image
+digest is `sha256:d628ac451c8e9ff4165e167c1edd7409c977f148027b39c987922bedcbcce4a4`.
+It is live on sgp001 3001/3002 and sgp002 SQ. The scoped sgp001 backup is
+`/home/grey/backups/newapi-release-opencodex-prod-2026.10.04.3-20261004T135228Z`;
+SQ backup is
+`/home/grey/backups/newapi-release-opencodex-prod-2026.10.04.3-20261004T135658Z`.
+The first SQ cutover automatically rolled back when direct sgp002 probing of
+`154.36.183.112` timed out. After independently verifying both edges from
+gpl001, a private reverse SSH SOCKS probe bound only to sgp002 loopback
+allowed the original edge checks to pass. SQ Compose converged on stable port
+49011. The 30-minute `observe-full` reports passed 26/26 samples for 3001/3002
+and 19/20 for SQ; SQ's isolated failed sample did not trip its two-consecutive
+failure gate. Start and end real model smokes passed. The generic browser
+SSO/support-chat gate was explicitly skipped because its dedicated test
+credential was not loaded; install-command tests and public functional checks
+passed. `finalize-common` passed before/after stopping old green containers,
+released all three locks, and final public `/install/` served
+`index-BUxL8873.js` on all three sites with release `.3` status.
+
 ## Release tracking recheck (2026-10-04 UTC)
 
 The official `releases.openai.com/codex/channels/latest`, npm `latest`, and
