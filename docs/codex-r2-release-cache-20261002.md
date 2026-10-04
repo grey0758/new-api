@@ -14,6 +14,9 @@ SHA-256 values as bytes; the Worker now converts them to hex before comparing.
 After the fix, the remote test reported `release sync 0.160.0 false`, and the
 public status endpoint reported `state=ok` with matching official and cached
 versions. Worker deployment version: `2c3171d4-6692-4352-b08c-e3770e49bac1`.
+The next real cron fired at `2026-10-04T09:00:06.716Z`; public status showed
+`state=ok`, matching upstream/cached `0.160.0`, and that timestamp as the last
+successful check.
 
 ## Three-site install source selection (2026-10-03 UTC)
 
