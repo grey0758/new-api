@@ -29,7 +29,17 @@ archives (Linux, macOS and Windows, x64 and arm64) plus
 against the official release metadata SHA-256 as it streams. Only after all
 objects succeed does the Worker publish `channels/latest` and the versioned
 `release.json`. If upstream is unavailable, the last complete version remains
-served. The Worker allows only these keys and the installer script.
+served. Every check also verifies that all seven R2 objects still match the
+official digests, including when the release version has not changed. The
+public `https://api.opencodex.uk/codex-cache/sync-status.json` reports the
+last attempt, last success, upstream version, cached version, and any error.
+The Worker allows only these keys, the status, and the installer script.
+
+`channels/latest` is the official stable release channel. On 2026-10-04,
+official stable and npm `latest` were both `0.160.0`; npm `alpha` was
+`0.162.0-alpha.12`. A newer alpha number does not indicate that the stable R2
+cache is stale. Run `npm test` in this directory to verify publishing and
+failure behavior before deployment.
 
 The Unix command downloads `install.sh`, a pinned copy of the official
 installer with only its release URL changed to this mirror and external

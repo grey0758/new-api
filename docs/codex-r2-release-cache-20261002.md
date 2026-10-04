@@ -1,5 +1,15 @@
 # Codex official package R2 mirror for api.opencodex.uk
 
+## Release tracking recheck (2026-10-04 UTC)
+
+The official `releases.openai.com/codex/channels/latest`, npm `latest`, and
+the public R2 `channels/latest` all reported `0.160.0`. npm `alpha` was
+`0.162.0-alpha.12`, a separate prerelease channel. The hourly Worker now
+checks all seven R2 object digests even when the official stable version is
+unchanged. It records the last attempt, last success, official version, R2
+version, and any failure at `/codex-cache/sync-status.json`. An incomplete new
+release does not replace the last complete `channels/latest`.
+
 ## Three-site install source selection (2026-10-03 UTC)
 
 The production source commit is `04957f50e7fbf33fecbc2ca36760bec531f65b24`,

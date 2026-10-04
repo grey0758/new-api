@@ -18,18 +18,17 @@ async function fetchOfficial(url) {
   return response;
 }
 
-async function update(env) {
+async function update(env, status = {}) {
   const officialResponse = await fetchOfficial(`${UPSTREAM}/channels/latest?checked_at=${Date.now()}`);
   const text = await officialResponse.text();
   const release = JSON.parse(text);
   const match = VERSION.exec(release.tag_name || '');
   if (!match || !Array.isArray(release.assets)) throw new Error('Invalid official release metadata');
   const version = match[1];
+  status.upstream_version = version;
   const current = await env.PACKAGES.get('channels/latest');
-  if (current) {
-    const previous = JSON.parse(await current.text());
-    if (previous.tag_name === release.tag_name) return { version, changed: false };
-  }
+  const previousText = current ? await current.text() : null;
+  let changed = previousText !== text;
   const assets = new Map(release.assets.map((asset) => [asset.name, asset]));
   for (const name of REQUIRED) {
     const asset = assets.get(name);
@@ -38,6 +37,7 @@ async function update(env) {
     const key = `releases/${version}/${name}`;
     const existing = await env.PACKAGES.head(key);
     if (existing?.checksums?.sha256?.toLowerCase() === digest[1].toLowerCase()) continue;
+    changed = true;
     const response = await fetchOfficial(`${UPSTREAM}/${key}`);
     await env.PACKAGES.put(key, response.body, {
       sha256: digest[1],
@@ -45,11 +45,44 @@ async function update(env) {
       customMetadata: { source: 'releases.openai.com', version },
     });
   }
+  if (!changed) return { version, changed: false };
   // Publish only after every archive and checksum has reached R2.
   const metadata = { httpMetadata: { contentType: 'application/json; charset=utf-8', cacheControl: 'no-cache' } };
   await env.PACKAGES.put(`releases/${version}/release.json`, text, metadata);
   await env.PACKAGES.put('channels/latest', text, metadata);
   return { version, changed: true };
+}
+
+async function syncAndRecord(env) {
+  const checkedAt = new Date().toISOString();
+  const previousObject = await env.PACKAGES.get('sync-status.json');
+  const previous = previousObject ? JSON.parse(await previousObject.text()) : {};
+  const cachedObject = await env.PACKAGES.get('channels/latest');
+  const cached = cachedObject ? JSON.parse(await cachedObject.text()) : null;
+  const status = {
+    state: 'checking',
+    last_attempt_at: checkedAt,
+    last_success_at: previous.last_success_at || null,
+    upstream_version: null,
+    cached_version: cached?.tag_name?.replace(/^rust-v/, '') || null,
+    changed: false,
+    error: null,
+  };
+  try {
+    const result = await update(env, status);
+    status.state = 'ok';
+    status.last_success_at = checkedAt;
+    status.cached_version = result.version;
+    status.changed = result.changed;
+  } catch (error) {
+    status.state = 'error';
+    status.error = String(error).slice(0, 300);
+  }
+  await env.PACKAGES.put('sync-status.json', JSON.stringify(status), {
+    httpMetadata: { contentType: 'application/json; charset=utf-8', cacheControl: 'no-store' },
+  });
+  if (status.state === 'error') throw new Error(status.error);
+  return status;
 }
 
 async function serve(request, env) {
@@ -61,6 +94,13 @@ async function serve(request, env) {
     if (!object) return new Response('Installer unavailable', { status: 503 });
     return new Response(request.method === 'HEAD' ? null : object.body, {
       headers: { 'Content-Type': 'text/x-shellscript; charset=utf-8', 'Cache-Control': 'public, max-age=300', 'X-Codex-Cache': 'r2' },
+    });
+  }
+  if (key === 'sync-status.json') {
+    const object = await env.PACKAGES.get(key);
+    if (!object) return new Response('Sync status unavailable', { status: 503 });
+    return new Response(request.method === 'HEAD' ? null : object.body, {
+      headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Codex-Cache': 'r2' },
     });
   }
   if (!/^channels\/latest$/.test(key) && !/^releases\/[0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|beta)(?:\.[0-9]+){0,2})?\/(?:release\.json|codex-package_(?:SHA256SUMS)|codex-package-(?:x86_64|aarch64)-(?:unknown-linux-musl|apple-darwin|pc-windows-msvc)\.tar\.gz)$/.test(key)) {
@@ -93,8 +133,8 @@ export default {
     catch (error) { console.error('cache serve failed', String(error)); return new Response('Cache unavailable', { status: 503 }); }
   },
   async scheduled(_event, env, ctx) {
-    ctx.waitUntil(update(env).then((result) => console.log('release sync', result.version, result.changed)).catch((error) => console.error('release sync failed', String(error))));
+    ctx.waitUntil(syncAndRecord(env).then((status) => console.log('release sync', status.cached_version, status.changed)).catch((error) => console.error('release sync failed', String(error))));
   },
 };
 
-export { update };
+export { update, syncAndRecord };
