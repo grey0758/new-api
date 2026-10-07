@@ -1,8 +1,13 @@
-# Channel47 image reference compatibility candidate
+# Channel47 image reference compatibility release
 
-This is tested source on branch `fix/channel47-image-compat-20261007`, based
-on main `6596e4ffc`. It is **not deployed** and is not proof that the original
-request is repaired.
+Production release `opencodex-prod-2026.10.07.3` contains this compatibility
+and the local image-error preservation fix, source
+`95b1eb25edb7a972af5e1896376afc599f27463c`. The owner authorized rollout to all
+eight active NewAPI deployments on sgp001 and sgp002. All eight completed
+cutover, Compose convergence where applicable, full30-minute observation and
+finalization. The final readback confirms one exact image digest and one
+current Leader per database; this is not proof that the original request is
+repaired.
 
 ## Incident and reproduction boundary
 
@@ -31,7 +36,7 @@ Synthetic file IDs failed with invalid URL or not-found errors. An opaque
 normalized inline Base64 image data URL. An image with no source failed400.
 These are separate validation failures, not reproductions of the incident.
 
-## Candidate behavior
+## Released behavior
 
 Only channel ID47, the exact Krill `/codex` provider identity, and the ordinary
 Responses relay mode are eligible. Immediately before the first upstream send,
@@ -44,7 +49,9 @@ cache apply. PNG, JPEG, WebP and GIF bytes are Base64-encoded without resizing
 or recompressing. Image detail, message order, call IDs, tool output, unknown
 fields and large integers remain intact. Repeated URLs share the request
 cache. Fetch failures return400 without upstream send/retry and without
-printing signed image URLs in their errors.
+printing signed image URLs in their errors. Existing `PreserveUserError`,
+`NoRecordErrorLog` and skip-retry flags preserve the local400 through channel
+error processing and avoid recording a local fetch failure as channel damage.
 
 Existing inline images, file IDs, opaque resource pointers, compact requests,
 other channels and other providers retain their previous behavior. There is
@@ -64,8 +71,29 @@ idempotence and non-image input. The standard installed `go` launcher first
 failed with toolchain/cache access errors; invoking the matching cached
 toolchain directly with a task-specific GOCACHE succeeded.
 
-No production configuration/database/container or public artifact was changed.
-The current NewAPI3002 release remains `.10.04.3`.
+The final release passed complete Go/Web/Docker tests, govulncheck, Trivy,
+CodeQL and publication. The exact immutable amd64 image is
+`ghcr.io/grey0758/new-api@sha256:6f2f8d0dbb6f1df3c3211d3fbbc0aa15dde52fbb52093abf252d3776a1be785b`.
+Deployment independently verifies its Cosign signature, SLSA v1 provenance
+and SPDX SBOM. A controller regression verifies that local400 survives final
+error handling without retry or channel-error recording.
+
+NewAPI3002's final green probes returned400 `convert_request_failed` for a
+blocked loopback image and200 completed for a public PNG. A separate public
+streaming request returned200 and `response.completed`. These are synthetic
+release gates, not a replay of the original incident. The rollout preserves
+all existing channel, ability, option and CLIProxy configuration.
+
+The five shared instances passed23/23 observation samples, isolated VIP/video
+passed25/25, and SQ passed23/24 with one nonconsecutive SSH connection timeout.
+All start/end applicable provider, functional and Leader gates passed. Old
+containers were stopped and release locks released. Final channel/ability/
+option hashes matched across eight databases, and all93 CLIProxy Auth files,
+configs and container identities matched their original recovery archives.
+VIP/video have no API tokens, so their bootstrap gates checked empty ledgers,
+health/auth/pricing without creating users or sending paid model requests.
+Browser SSO/support-chat gates were skipped because the dedicated test
+credential was not loaded; there was no browser/auth frontend code change.
 
 Before treating this as the incident fix, obtain the original image source
 shape (field names, URI scheme, attachment versus tool-output location), or a
@@ -74,5 +102,7 @@ or business transcript is required. If the original already used inline
 Base64, this conversion cannot fix the upstream failure. A file ID or opaque
 asset without retrievable bytes needs a separately validated resolution path.
 
-Any deployment must use the existing signed immutable-image and scoped
-blue/green release gates; do not bypass them with a locally rebuilt container.
+Future deployments must use the existing signed immutable-image and scoped
+blue/green or Compose release gates; do not bypass them with a locally rebuilt
+container. Shared sgp001 instances use Nginx blue/green; SQ uses its dedicated
+sgp002 wrapper; isolated VIP/video retain their separate Compose stacks.
