@@ -28,7 +28,11 @@ RUN go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$
 FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
 
 COPY deploy/security/libpcre2-8-0_10.42-1+deb12u2_amd64.deb /tmp/libpcre2-8-0.deb
-RUN apt-get update \
+# Advance this date when Debian publishes security fixes so the shared build
+# cache cannot retain an older apt upgrade layer across production releases.
+ARG OPENCODEX_DEBIAN_SECURITY_REFRESH=2026-10-07
+RUN test -n "$OPENCODEX_DEBIAN_SECURITY_REFRESH" \
+    && apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends ca-certificates tzdata libasan8 wget \
     && echo 'd2f7edfcc7689b9e0761c2742cc824ac86a20768bc5e8057818dc6875291fe76  /tmp/libpcre2-8-0.deb' | sha256sum -c - \
