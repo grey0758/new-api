@@ -116,7 +116,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	}
 	requestBody, err = openai.PrepareResponsesImageBody(c, info, requestBody)
 	if err != nil {
-		return types.NewErrorWithStatusCode(err, types.ErrorCodeConvertRequestFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		return openai.NewResponsesInputImageError(err)
 	}
 
 	var httpResp *http.Response

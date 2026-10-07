@@ -126,7 +126,7 @@ func chatCompletionsViaResponses(c *gin.Context, info *relaycommon.RelayInfo, ad
 
 	requestBody, err := openaichannel.PrepareResponsesImageBody(c, info, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeConvertRequestFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		return nil, openaichannel.NewResponsesInputImageError(err)
 	}
 	var httpResp *http.Response
 	resp, err := adaptor.DoRequest(c, info, requestBody)

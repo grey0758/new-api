@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -15,6 +16,13 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
+
+// NewResponsesInputImageError preserves a sanitized local client failure
+// without recording it as an upstream channel health failure.
+func NewResponsesInputImageError(err error) *types.NewAPIError {
+	return types.NewErrorWithStatusCode(err, types.ErrorCodeConvertRequestFailed, http.StatusBadRequest,
+		types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog(), types.ErrOptionWithPreserveUserError())
+}
 
 // PrepareResponsesImageBody resolves downloadable image references before the
 // channel47 Krill Codex transport sees them. Its rustponsesapi backend requires
