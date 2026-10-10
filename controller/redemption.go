@@ -261,8 +261,8 @@ func GetRedemptionSubscriptionPlansWithToken(c *gin.Context) {
 		})
 		return
 	}
-	var plans []model.SubscriptionPlan
-	if err := model.DB.Where("enabled = ?", true).Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
+	plans, err := model.ListSubscriptionPlans(true)
+	if err != nil {
 		common.ApiError(c, err)
 		return
 	}

@@ -161,6 +161,8 @@ type SubscriptionPlan struct {
 
 	Enabled   bool `json:"enabled" gorm:"default:true"`
 	SortOrder int  `json:"sort_order" gorm:"type:int;default:0"`
+	// Archived plans remain readable for existing subscriptions and billing history.
+	ArchivedAt int64 `json:"archived_at" gorm:"bigint;not null;default:0"`
 
 	StripePriceId  string `json:"stripe_price_id" gorm:"type:varchar(128);default:''"`
 	CreemProductId string `json:"creem_product_id" gorm:"type:varchar(128);default:''"`
@@ -199,6 +201,16 @@ func NormalizeSubscriptionPlans(plans []SubscriptionPlan) {
 	for i := range plans {
 		plans[i].ApplyPricingPolicy()
 	}
+}
+
+func ListSubscriptionPlans(enabledOnly bool) ([]SubscriptionPlan, error) {
+	var plans []SubscriptionPlan
+	query := DB.Where("archived_at = ?", 0)
+	if enabledOnly {
+		query = query.Where("enabled = ?", true)
+	}
+	err := query.Order("sort_order desc, id desc").Find(&plans).Error
+	return plans, err
 }
 
 func (p *SubscriptionPlan) BeforeCreate(tx *gorm.DB) error {
@@ -535,6 +547,9 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 	}
 	if plan == nil || plan.Id == 0 {
 		return nil, errors.New("invalid plan")
+	}
+	if plan.ArchivedAt > 0 {
+		return nil, errors.New("subscription plan is archived")
 	}
 	if userId <= 0 {
 		return nil, errors.New("invalid user id")

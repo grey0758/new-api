@@ -24,8 +24,8 @@ type BillingPreferenceRequest struct {
 // ---- User APIs ----
 
 func GetSubscriptionPlans(c *gin.Context) {
-	var plans []model.SubscriptionPlan
-	if err := model.DB.Where("enabled = ?", true).Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
+	plans, err := model.ListSubscriptionPlans(true)
+	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -90,8 +90,8 @@ func UpdateSubscriptionPreference(c *gin.Context) {
 // ---- Admin APIs ----
 
 func AdminListSubscriptionPlans(c *gin.Context) {
-	var plans []model.SubscriptionPlan
-	if err := model.DB.Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
+	plans, err := model.ListSubscriptionPlans(false)
+	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -116,6 +116,7 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 		return
 	}
 	req.Plan.Id = 0
+	req.Plan.ArchivedAt = 0
 	if strings.TrimSpace(req.Plan.Title) == "" {
 		common.ApiErrorMsg(c, "套餐标题不能为空")
 		return
@@ -245,8 +246,12 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"quota_reset_custom_seconds": req.Plan.QuotaResetCustomSeconds,
 			"updated_at":                 common.GetTimestamp(),
 		}
-		if err := tx.Model(&model.SubscriptionPlan{}).Where("id = ?", id).Updates(updateMap).Error; err != nil {
-			return err
+		result := tx.Model(&model.SubscriptionPlan{}).Where("id = ? AND archived_at = ?", id, 0).Updates(updateMap)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
 		}
 		return nil
 	})
@@ -273,8 +278,13 @@ func AdminUpdateSubscriptionPlanStatus(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	if err := model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", id).Update("enabled", *req.Enabled).Error; err != nil {
-		common.ApiError(c, err)
+	result := model.DB.Model(&model.SubscriptionPlan{}).Where("id = ? AND archived_at = ?", id, 0).Update("enabled", *req.Enabled)
+	if result.Error != nil {
+		common.ApiError(c, result.Error)
+		return
+	}
+	if result.RowsAffected == 0 {
+		common.ApiError(c, gorm.ErrRecordNotFound)
 		return
 	}
 	model.InvalidateSubscriptionPlanCache(id)
