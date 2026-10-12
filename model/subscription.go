@@ -163,6 +163,9 @@ type SubscriptionPlan struct {
 	SortOrder int  `json:"sort_order" gorm:"type:int;default:0"`
 	// Archived plans remain readable for existing subscriptions and billing history.
 	ArchivedAt int64 `json:"archived_at" gorm:"bigint;not null;default:0"`
+	// Sale retirement hides an offer and prevents new checkout/code issuance,
+	// while previously issued codes, pending orders and subscriptions still work.
+	SaleRetiredAt int64 `json:"sale_retired_at" gorm:"bigint;not null;default:0"`
 
 	StripePriceId  string `json:"stripe_price_id" gorm:"type:varchar(128);default:''"`
 	CreemProductId string `json:"creem_product_id" gorm:"type:varchar(128);default:''"`
@@ -218,7 +221,7 @@ func NormalizeSubscriptionPlans(plans []SubscriptionPlan) {
 
 func ListSubscriptionPlans(enabledOnly bool) ([]SubscriptionPlan, error) {
 	var plans []SubscriptionPlan
-	query := DB.Where("archived_at = ?", 0)
+	query := DB.Where("archived_at = ? AND sale_retired_at = ?", 0, 0)
 	if enabledOnly {
 		query = query.Where("enabled = ?", true)
 	}

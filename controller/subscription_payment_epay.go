@@ -34,7 +34,7 @@ func SubscriptionRequestEpay(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if !plan.Enabled {
+	if !plan.Enabled || plan.ArchivedAt > 0 || plan.SaleRetiredAt > 0 {
 		common.ApiErrorMsg(c, "套餐未启用")
 		return
 	}

@@ -195,7 +195,7 @@ func GenerateRedemptionWithToken(c *gin.Context) {
 		common.ApiErrorMsg(c, "兑换码绑定的订阅套餐不存在")
 		return
 	}
-	if !plan.Enabled {
+	if !plan.Enabled || plan.ArchivedAt > 0 || plan.SaleRetiredAt > 0 {
 		common.ApiErrorMsg(c, "兑换码绑定的订阅套餐已禁用")
 		return
 	}

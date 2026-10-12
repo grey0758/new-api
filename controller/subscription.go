@@ -117,6 +117,7 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 	}
 	req.Plan.Id = 0
 	req.Plan.ArchivedAt = 0
+	req.Plan.SaleRetiredAt = 0
 	if strings.TrimSpace(req.Plan.Title) == "" {
 		common.ApiErrorMsg(c, "套餐标题不能为空")
 		return
