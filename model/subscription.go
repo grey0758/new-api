@@ -184,6 +184,19 @@ type SubscriptionPlan struct {
 	UpdatedAt int64 `json:"updated_at" gorm:"bigint"`
 }
 
+// NormalizeSubscriptionCurrency validates the settlement currency independently
+// of the user's quota display preference. Empty remains USD for legacy clients.
+func NormalizeSubscriptionCurrency(currency string) (string, error) {
+	currency = strings.ToUpper(strings.TrimSpace(currency))
+	if currency == "" {
+		currency = "USD"
+	}
+	if currency != "USD" && currency != "CNY" {
+		return "", errors.New("套餐币种仅支持 USD 或 CNY")
+	}
+	return currency, nil
+}
+
 func (p *SubscriptionPlan) IsMonthlyCard() bool {
 	return p != nil && p.DurationUnit == SubscriptionDurationMonth && p.DurationValue == 1
 }

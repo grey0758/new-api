@@ -72,6 +72,11 @@ jobs:
           TZ: Asia/Shanghai
         run: bun run test:subscription-time
 
+      - name: Run subscription-price tests
+        if: matrix.suite == 'web'
+        working-directory: web
+        run: node scripts/check-subscription-price.mjs
+
       - name: Build frontend
         if: matrix.suite == 'web'
         working-directory: web
