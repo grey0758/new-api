@@ -50,6 +50,7 @@ with tempfile.TemporaryDirectory(prefix='unix-installer-test-') as td:
     check=subprocess.run(['sh','-c','. "$CODEX_HOME/env"; printf "%s" "$CODEX_API_KEY"'],env=env,text=True,capture_output=True,check=True)
     assert check.stdout==key
     assert (home/'.profile').read_text().count('# OpenCodex environment')==1
+    assert (home/'.zshenv').read_text().count('# OpenCodex environment')==1
     assert '.claude/env' in (home/'.profile').read_text()
     assert not (home/'.bash_profile').exists(), 'do not create a profile which shadows .profile'
     assert key not in run.stdout+run.stderr
