@@ -11,7 +11,7 @@ fixture = '''#!/bin/sh
 set -eu
 if [ "${FAIL_INSTALL:-0}" = 1 ]; then exit 19; fi
 mkdir -p "$CODEX_INSTALL_DIR"
-printf '#!/bin/sh\\nprintf "codex-cli fixture\\\\n"\\n' > "$CODEX_INSTALL_DIR/codex"
+printf '#!/bin/sh\\nif [ "${1:-}" = login ]; then cat >/dev/null; printf "fixture-login" > "$CODEX_HOME/auth.json"; exit 0; fi\\nif [ "${1:-}" = app-server ]; then printf "restarted" > "$CODEX_HOME/daemon-test"; exit 0; fi\\nprintf "codex-cli fixture\\\\n"\\n' > "$CODEX_INSTALL_DIR/codex"
 chmod +x "$CODEX_INSTALL_DIR/codex"
 '''
 cases=0
@@ -24,7 +24,7 @@ with tempfile.TemporaryDirectory(prefix='unix-installer-test-') as td:
   for source in ['r2','official']:
    home=root/(platform+'-'+source+' space \' " \\ $(`touch NEVER`)'); home.mkdir()
    ch=home/'.codex'; ch.mkdir()
-   original='model = "preserve-before-install"\n'; (ch/'config.toml').write_text(original)
+   original='model = "preserve-before-install"\n[features]\nsearch = true\n'; (ch/'config.toml').write_text(original)
    (ch/'auth.json').write_text('synthetic-auth-do-not-touch'); (home/'.profile').write_text('export KEEP=yes\n[ -f "$HOME/.claude/env" ] && . "$HOME/.claude/env"\n')
    key='DUMMY_\'"$(`touch INJECTION`)\\end'
    command=subprocess.run(['node','--input-type=module','-e',EMIT],cwd=ROOT,input=json.dumps({'os':platform,'source':source,'key':key,'base':'https://api.open-codex.com/v1'}),text=True,capture_output=True,check=True).stdout
@@ -38,9 +38,14 @@ with tempfile.TemporaryDirectory(prefix='unix-installer-test-') as td:
     parsed=tomllib.loads((ch/'config.toml').read_text())
     assert parsed['projects'][str(home/'opencodex-workspace')]['trust_level']=='trusted'
     assert parsed['notice']['model_migrations']['gpt-5.3-codex']=='gpt-5.6-sol'
-    assert parsed['model_providers']['codex']['base_url']=='https://api.open-codex.com/v1'
+    provider='manual' if platform=='macos' else 'codex'
+    assert parsed['model_provider']==provider
+    assert parsed['model_providers'][provider]['base_url']=='https://api.open-codex.com/v1'
     assert parsed['model_reasoning_effort']=='xhigh'
-    assert (ch/'auth.json').read_text()=='synthetic-auth-do-not-touch'
+    assert (ch/'auth.json').read_text()==('fixture-login' if platform=='macos' else 'synthetic-auth-do-not-touch')
+    if platform=='macos':
+     assert parsed['features']['search'] is True
+     assert (ch/'daemon-test').read_text()=='restarted'
     for name in ['env','config.toml']: assert (ch/name).stat().st_mode & 0o777==0o600
     check=subprocess.run(['sh','-c','. "$CODEX_HOME/env"; printf "%s" "$CODEX_API_KEY"'],env=env,text=True,capture_output=True,check=True)
     assert check.stdout==key

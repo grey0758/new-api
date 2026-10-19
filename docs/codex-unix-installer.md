@@ -12,6 +12,13 @@ auth.json. Credentials are supplied through CODEX_API_KEY in the private env fil
 Repeated execution retains one source line per startup file and does not create
 a missing .bash_profile which could shadow .profile. CODEX_HOME is supported.
 
+On macOS, the generated command now uses the `manual` Responses provider and
+the selected API URL, model, and reasoning level. It preserves unrelated
+TOML sections, removes obsolete Codex provider settings, clears conflicting
+API key variables, runs `codex login --with-api-key`, and restarts the local
+app-server daemon. The key comes from the install page input; no key is stored
+in source. Both R2 and official package selections use this configuration.
+
 Run `cd web && bun run test:install-command` for generated-command checks and
 real shell/config roundtrips with synthetic credentials and an offline installer.
 The roundtrips exercise both platforms/sources, special characters in paths and

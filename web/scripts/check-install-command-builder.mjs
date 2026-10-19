@@ -117,6 +117,11 @@ const macosCommand = buildInstallCommand(
   'gpt-5.6-sol',
   'xhigh',
 );
+assert(macosCommand.includes('model_provider = "manual"'));
+assert(macosCommand.includes('[model_providers.manual]'));
+assert(macosCommand.includes('login --with-api-key'));
+assert(macosCommand.includes('app-server daemon restart'));
+assert(macosCommand.includes('unset API_KEY OPENAI_API_KEY'));
 assert(
   macosCommand.includes('WORK_DIR="$HOME/opencodex-workspace"') &&
     macosCommand.includes('cd "$WORK_DIR"') &&

@@ -2,7 +2,30 @@
 const shellQuote = (value) =>
   "'" + String(value).replaceAll("'", "'\\''") + "'";
 
+const mergeMacosConfig = String.raw`from pathlib import Path
+import re, sys
+old, candidate, project = map(Path, sys.argv[1:])
+if not old.exists():
+    sys.exit(0)
+kept = []
+section = None
+skip = False
+project_section = 'projects.' + '"' + str(project).replace('\\', '\\\\').replace('"', '\\"') + '"'
+for line in old.read_text().splitlines():
+    match = re.match(r'^\s*\[([^]]+)\]\s*$', line)
+    if match:
+        section = match.group(1)
+        skip = section in ('model_providers.codex', 'model_providers.manual', 'notice.model_migrations', project_section)
+    if skip or (section is None and re.match(r'^\s*(model_provider|model|model_reasoning_effort|approval_policy|sandbox_mode|web_search|disable_response_storage)\s*=', line)):
+        continue
+    kept.append(line)
+content = candidate.read_text()
+marker = '[model_providers.manual]'
+assert content.count(marker) == 1
+candidate.write_text(content.replace(marker, '\n'.join(kept).strip() + '\n\n' + marker, 1))`;
+
 export function buildUnixNativeInstallCommand({
+  os = 'linux',
   apiKey,
   baseUrl,
   model,
@@ -10,20 +33,21 @@ export function buildUnixNativeInstallCommand({
   config,
   packageSource = 'r2',
 }) {
+  const isMacos = os === 'macos';
   const installer =
     packageSource === 'official'
       ? 'https://releases.openai.com/codex/install.sh'
       : 'https://api.opencodex.uk/codex-cache/install.sh';
   const toml = [
-    'model_provider = "codex"',
+    `model_provider = "${isMacos ? 'manual' : 'codex'}"`,
     `model = ${JSON.stringify(model)}`,
     `model_reasoning_effort = ${JSON.stringify(reasoningEffort)}`,
     `approval_policy = ${JSON.stringify(config.approvalPolicy)}`,
     `sandbox_mode = ${JSON.stringify(config.sandboxMode)}`,
     'web_search = "live"',
     '',
-    '[model_providers.codex]',
-    'name = "codex"',
+    `[model_providers.${isMacos ? 'manual' : 'codex'}]`,
+    `name = "${isMacos ? 'Manual' : 'codex'}"`,
     `base_url = ${JSON.stringify(baseUrl)}`,
     'wire_api = "responses"',
     'env_key = "CODEX_API_KEY"',
@@ -33,6 +57,7 @@ export function buildUnixNativeInstallCommand({
     `"gpt-5.3-codex" = ${JSON.stringify(model)}`,
   ].join('\n');
   const env = [
+    ...(isMacos ? ['unset API_KEY OPENAI_API_KEY'] : []),
     `export CODEX_API_KEY=${shellQuote(apiKey.trim() || 'YOUR_KEY')}`,
     `export BASE_URL=${shellQuote(baseUrl)}`,
     `export MODEL_NAME=${shellQuote(model)}`,
@@ -43,6 +68,7 @@ export function buildUnixNativeInstallCommand({
     'umask 077',
     'for dep in curl tar mktemp awk sed cp mv chmod; do command -v "$dep" >/dev/null 2>&1 || { printf "缺少依赖: %s\\n" "$dep" >&2; exit 1; }; done',
     'CODEX_HOME_PATH="${CODEX_HOME:-$HOME/.codex}"',
+    'export CODEX_HOME="$CODEX_HOME_PATH"',
     `WORK_DIR="$HOME/${config.workspaceName}"`,
     'CODEX_BIN="$HOME/.local/bin/codex"',
     'mkdir -p "$CODEX_HOME_PATH" "$WORK_DIR"',
@@ -63,6 +89,7 @@ export function buildUnixNativeInstallCommand({
     String.raw`PROJECT_PATH="${'$'}{PROJECT_PATH//$'\t'/\\t}"`,
     `printf '%s\\n' ${toml.split('\n').map(shellQuote).join(' ')} > "$CODEX_HOME_PATH/config.toml.new"`,
     String.raw`printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$PROJECT_PATH" >> "$CODEX_HOME_PATH/config.toml.new"`,
+    ...(isMacos ? [`python3 -c ${shellQuote(mergeMacosConfig)} "$CODEX_HOME_PATH/config.toml" "$CODEX_HOME_PATH/config.toml.new" "$WORK_DIR"`] : []),
     'chmod 600 "$CODEX_HOME_PATH/config.toml.new"',
     'mv "$CODEX_HOME_PATH/config.toml.new" "$CODEX_HOME_PATH/config.toml"',
     `printf '%s\\n' ${env.split('\n').map(shellQuote).join(' ')} > "$CODEX_HOME_PATH/env.new"`,
@@ -73,6 +100,12 @@ export function buildUnixNativeInstallCommand({
     'mv "$CODEX_HOME_PATH/env.new" "$CODEX_HOME_PATH/env"',
     String.raw`for rc in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.zshrc" "$HOME/.zprofile"; do if [ "$rc" = "$HOME/.bash_profile" ] && [ ! -f "$rc" ]; then continue; fi; if [ -f "$rc" ]; then cp -p "$rc" "$BACKUP_DIR/$(basename "$rc")"; else : > "$rc"; fi; tmp="$(mktemp)"; awk -v env_path="$CODEX_HOME_PATH/env" '!/^# OpenCodex environment$/ && !/^# End OpenCodex environment$/ && !( /^[[:space:]]*\[ -f / && (index($0, env_path) || index($0, ".codex/env")) )' "$rc" > "$tmp"; { printf '\n# OpenCodex environment\n[ -f '; quote_sh "$CODEX_HOME_PATH/env"; printf ' ] && . '; quote_sh "$CODEX_HOME_PATH/env"; printf '\n# End OpenCodex environment\n'; } >> "$tmp"; cat "$tmp" > "$rc"; rm -f "$tmp"; done`,
     '. "$CODEX_HOME_PATH/env"',
+    ...(isMacos ? [
+      'printf "%s\\n" "$CODEX_API_KEY" | "$CODEX_BIN" login --with-api-key >/dev/null',
+      'chmod 600 "$CODEX_HOME_PATH/auth.json"',
+      'if command -v launchctl >/dev/null 2>&1; then launchctl setenv CODEX_API_KEY "$CODEX_API_KEY"; fi',
+      '"$CODEX_BIN" app-server daemon restart >/dev/null',
+    ] : []),
     'printf "配置已写入；原配置备份: %s\\n" "$BACKUP_DIR"',
     'cd "$WORK_DIR"',
     'if [ "${OPENCODEX_INSTALL_NO_LAUNCH:-0}" != 1 ]; then "$CODEX_BIN"' +

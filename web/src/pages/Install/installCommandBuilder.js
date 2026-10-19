@@ -623,6 +623,7 @@ export function buildInstallCommand(
 
   if (os !== 'windows') {
     return buildUnixNativeInstallCommand({
+      os,
       apiKey,
       baseUrl: codexBaseUrl,
       model: selectedModel,
