@@ -1,3 +1,4 @@
+import { buildUnixNativeInstallCommand } from './unixNativeInstaller.js';
 import { Laptop, Monitor, Terminal } from 'lucide-react';
 import { installViaCodexMirror } from './codexMirrorInstaller.js';
 
@@ -314,11 +315,10 @@ function forceResponsesHttpConfig(template) {
 
 function applyInstallCommandConfig(command, config, platform, reasoningEffort) {
   const normalizedConfig = normalizeInstallCommandConfig(config);
-  const normalizedReasoningEffort =
-    normalizeInstallReasoningEffort(
-      reasoningEffort,
-      normalizedConfig.reasoningEfforts,
-    );
+  const normalizedReasoningEffort = normalizeInstallReasoningEffort(
+    reasoningEffort,
+    normalizedConfig.reasoningEfforts,
+  );
   let result = command
     .replaceAll(
       '"model_reasoning_effort":"high"',
@@ -620,6 +620,20 @@ export function buildInstallCommand(
   const selectedModel = normalizedConfig.models.includes(model)
     ? model
     : normalizedConfig.defaultModel;
+
+  if (os !== 'windows') {
+    return buildUnixNativeInstallCommand({
+      apiKey,
+      baseUrl: codexBaseUrl,
+      model: selectedModel,
+      reasoningEffort: normalizeInstallReasoningEffort(
+        reasoningEffort,
+        normalizedConfig.reasoningEfforts,
+      ),
+      config: normalizedConfig,
+      packageSource,
+    });
+  }
 
   if (os === 'windows') {
     const command = buildWindowsCommand(

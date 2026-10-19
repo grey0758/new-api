@@ -44,7 +44,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test:install-command": "node scripts/check-install-command-builder.mjs",
+    "test:install-command": "node scripts/check-install-command-builder.mjs && python3 scripts/check-unix-native-installer.py",
     "test:registration-challenge": "node scripts/check-registration-challenge.mjs",
     "test:subscription-time": "node scripts/check-subscription-time.mjs",
     "lint": "prettier . --check",

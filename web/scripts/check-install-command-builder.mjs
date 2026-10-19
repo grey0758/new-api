@@ -103,11 +103,10 @@ const linuxCommand = buildInstallCommand(
   'xhigh',
 );
 assert(
-  linuxCommand.includes('install_node') &&
-    linuxCommand.includes('install_codex') &&
-    linuxCommand.includes('NODE_LTS_MAJOR=24') &&
-    linuxCommand.includes('CODEX_BIN="$CODEX_MIRROR_BIN"') &&
-    linuxCommand.includes('cd "$WORK_DIR" && "$CODEX_BIN"'),
+  !linuxCommand.includes('install_node') &&
+    linuxCommand.includes('CODEX_NON_INTERACTIVE=true') &&
+    linuxCommand.includes('CODEX_BIN="$HOME/.local/bin/codex"') &&
+    linuxCommand.includes('cd "$WORK_DIR"'),
   'linux command must use the canonical OpenCodex install flow',
 );
 
@@ -120,7 +119,8 @@ const macosCommand = buildInstallCommand(
 );
 assert(
   macosCommand.includes('WORK_DIR="$HOME/opencodex-workspace"') &&
-    macosCommand.includes('cd "$WORK_DIR" && "$CODEX_MIRROR_BIN"'),
+    macosCommand.includes('cd "$WORK_DIR"') &&
+    !macosCommand.includes('Homebrew'),
   'macos command must launch Codex from the per-user workspace',
 );
 
@@ -133,7 +133,9 @@ const windowsCommand = buildInstallCommand(
 );
 assert(
   windowsCommand.includes('opencodex-workspace') &&
-    windowsCommand.includes('$codexCmd = [pscustomobject]@{ Source = $codexExe }') &&
+    windowsCommand.includes(
+      '$codexCmd = [pscustomobject]@{ Source = $codexExe }',
+    ) &&
     windowsCommand.includes('Set-Location $workDir; & $codexCmd.Source'),
   'windows command must launch Codex from the per-user workspace',
 );
@@ -151,7 +153,9 @@ assert(
   windowsCommand.includes('Get-FileHash -Algorithm SHA256') &&
     windowsCommand.includes('codex-package-') &&
     windowsCommand.includes('codex-cache/channels/latest') &&
-    windowsCommand.includes("$codexInstalledVersion -ne ('codex-cli ' + $codexVersion)"),
+    windowsCommand.includes(
+      "$codexInstalledVersion -ne ('codex-cli ' + $codexVersion)",
+    ),
   'windows command must verify the mirrored official native package',
 );
 
@@ -188,7 +192,13 @@ for (const baseUrl of [
     assert(mirroredCommand.includes('https://api.opencodex.uk/codex-cache/'));
     assert(!mirroredCommand.includes('npm install -g @openai/codex@latest'));
     assert(!officialCommand.includes('/codex-cache/'));
-    assert(officialCommand.includes('npm install -g @openai/codex@latest'));
+    assert(
+      officialCommand.includes(
+        platform === 'windows'
+          ? 'npm install -g @openai/codex@latest'
+          : 'https://releases.openai.com/codex/install.sh',
+      ),
+    );
   }
 }
 
@@ -204,7 +214,7 @@ for (const platform of platforms) {
     const configMarker =
       platform === 'windows'
         ? `model_reasoning_effort='${effort}'`
-        : `"model_reasoning_effort":"${effort}"`;
+        : `model_reasoning_effort = "${effort}"`;
     assert(
       command.includes(configMarker) &&
         command.includes(`model_reasoning_effort = "${effort}"`),
