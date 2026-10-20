@@ -7,7 +7,7 @@ import (
 
 func TestDefaultInstallCommandConfigUsesCurrentModels(t *testing.T) {
 	config := defaultInstallCommandConfig()
-	wantModels := []string{"gpt-5.5", "gpt-5.6-sol"}
+	wantModels := []string{"gpt-5.5", "gpt-5.6-sol", "gpt-6.1-sol"}
 	if len(config.Models) != len(wantModels) {
 		t.Fatalf("models = %v, want %v", config.Models, wantModels)
 	}
@@ -37,7 +37,7 @@ func TestNormalizeInstallCommandConfigValuePreservesCurrentDefaults(t *testing.T
 	if err := json.Unmarshal([]byte(normalized), &config); err != nil {
 		t.Fatalf("decode normalized install command config: %v", err)
 	}
-	if config.DefaultModel != "gpt-5.6-sol" || !containsString(config.Models, "gpt-5.5") || !containsString(config.Models, "gpt-5.6-sol") {
+	if config.DefaultModel != "gpt-5.6-sol" || !containsString(config.Models, "gpt-5.5") || !containsString(config.Models, "gpt-5.6-sol") || !containsString(config.Models, "gpt-6.1-sol") {
 		t.Fatalf("normalized config = %+v", config)
 	}
 	if config.DefaultReasoningEffort != "xhigh" || !containsString(config.ReasoningEfforts, "xhigh") || !containsString(config.ReasoningEfforts, "max") {

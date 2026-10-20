@@ -39,7 +39,7 @@ type installCommandConfig struct {
 
 func defaultInstallCommandConfig() installCommandConfig {
 	return installCommandConfig{
-		Models:                  []string{"gpt-5.5", "gpt-5.6-sol"},
+		Models:                  []string{"gpt-5.5", "gpt-5.6-sol", "gpt-6.1-sol"},
 		DefaultModel:            "gpt-5.6-sol",
 		ReasoningEfforts:        []string{"xhigh", "max"},
 		DefaultReasoningEffort:  "xhigh",

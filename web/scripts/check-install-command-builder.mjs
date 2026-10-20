@@ -42,8 +42,23 @@ assert.equal(
   normalizeCodexBaseUrl('https://api.opencodex.uk/v1/'),
   'https://api.opencodex.uk/v1',
 );
-assert.deepEqual(INSTALL_MODELS, ['gpt-5.5', 'gpt-5.6-sol']);
+assert.deepEqual(INSTALL_MODELS, ['gpt-5.5', 'gpt-5.6-sol', 'gpt-6.1-sol']);
 assert.equal(DEFAULT_INSTALL_COMMAND_CONFIG.defaultModel, 'gpt-5.6-sol');
+for (const platform of platforms) {
+  const command = buildInstallCommand(
+    platform,
+    'DUMMY_KEY',
+    'https://api.opencodex.uk',
+    'gpt-6.1-sol',
+    'xhigh',
+  );
+  assert(
+    command.includes('model = "gpt-6.1-sol"') ||
+      command.includes("$model = 'gpt-6.1-sol'") ||
+      command.includes("model='gpt-6.1-sol'"),
+    `${platform} command must retain the selected gpt-6.1-sol model`,
+  );
+}
 assert.equal(DEFAULT_INSTALL_REASONING_EFFORT, 'xhigh');
 assert.deepEqual(
   INSTALL_REASONING_EFFORTS.map((item) => [item.id, item.label]),

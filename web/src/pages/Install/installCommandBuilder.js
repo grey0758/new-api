@@ -8,7 +8,7 @@ export const PLATFORMS = [
   { id: 'windows', label: 'Windows', icon: Monitor },
 ];
 
-export const INSTALL_MODELS = ['gpt-5.5', 'gpt-5.6-sol'];
+export const INSTALL_MODELS = ['gpt-5.5', 'gpt-5.6-sol', 'gpt-6.1-sol'];
 
 export const INSTALL_REASONING_EFFORTS = [
   { id: 'xhigh', label: '超高' },
