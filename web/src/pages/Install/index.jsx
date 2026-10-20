@@ -370,26 +370,17 @@ export default function Install() {
               </div>
 
               <div className='space-y-2'>
-                <label className='font-mono text-xs text-[#6f8096]'>模型</label>
-                <div className='grid gap-2 sm:grid-cols-2'>
-                  {modelOptions.map((option) => {
-                    const selected = option === model;
-                    return (
-                      <button
-                        key={option}
-                        type='button'
-                        onClick={() => setModel(option)}
-                        className={`h-11 rounded-lg border px-4 font-mono text-sm transition-colors ${
-                          selected
-                            ? 'border-[#00ff88]/35 bg-[#00ff88]/10 text-[#00ff88]'
-                            : 'border-white/10 bg-[#0a0d13] text-[#9fb0c7] hover:bg-white/5'
-                        }`}
-                      >
-                        {option}
-                      </button>
-                    );
-                  })}
-                </div>
+                <label htmlFor='install-model' className='font-mono text-xs text-[#6f8096]'>模型</label>
+                <select
+                  id='install-model'
+                  value={model}
+                  onChange={(event) => setModel(event.target.value)}
+                  className='install-page-input min-h-11 w-full rounded-lg border border-white/10 bg-[#0a0d13] px-4 py-3 font-mono text-sm text-white outline-none'
+                >
+                  {modelOptions.map((option) => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+                </select>
               </div>
             </div>
 
@@ -467,7 +458,7 @@ export default function Install() {
               <div className='grid gap-2 sm:grid-cols-2'>
                 {[
                   { id: 'r2', title: 'R2 加速（默认）', description: '从本站 R2 缓存下载，并校验官方发布包。' },
-                  { id: 'official', title: '官方源', description: '使用原来的官方 npm 安装命令。' },
+                  { id: 'official', title: '官方源', description: '直接从官方源下载，不经过 R2 缓存。' },
                 ].map((option) => {
                   const selected = packageSource === option.id;
                   return (
