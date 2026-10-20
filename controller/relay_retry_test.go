@@ -258,6 +258,39 @@ func TestRelayDoesNotRetryBridgeToolSessionError(t *testing.T) {
 	require.False(t, shouldStartNextRelayChannelSelectionCycle(c, info, err, 0))
 }
 
+func TestRelayRequestRejectionDoesNotRestartChannelSelection(t *testing.T) {
+	// A real bridge409 was correctly rejected by shouldRetry, then retried by
+	// the second selection cycle and replaced with get_channel_failed500.
+	for _, tc := range []struct {
+		name, code, message string
+		status              int
+	}{
+		{"live tool conflict", "outer_tool_session_conflict", "An outer-tool request is already in progress", http.StatusConflict},
+		{"missing tool session", "outer_tool_session_not_found", "No paused outer-tool session", http.StatusConflict},
+		{"content policy", "content_policy_violation", "The provider rejected this request", http.StatusForbidden},
+		{"cyber policy", "cyber_policy", "The provider rejected this request", http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			err := types.WithOpenAIError(types.OpenAIError{Type: "invalid_request_error", Code: tc.code, Message: tc.message}, tc.status)
+			require.False(t, types.IsSkipRetryError(err)) // No explicit upstream skip flag.
+			require.False(t, shouldRetry(c, err, 3, 71))
+			require.False(t, shouldRetryRelayError(err))
+			for _, last := range []*types.NewAPIError{nil, err} {
+				info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, LastError: last}
+				require.False(t, shouldStartNextRelayChannelSelectionCycle(c, info, err, 0))
+				// Selection must also preserve a prior request rejection when
+				// a later channel-selection error is passed by the caller.
+				if last != nil {
+					selectionErr := types.NewErrorWithStatusCode(errors.New("no candidate channel"), types.ErrorCodeGetChannelFailed, http.StatusInternalServerError)
+					require.False(t, shouldStartNextRelayChannelSelectionCycle(c, info, selectionErr, 0))
+				}
+			}
+		})
+	}
+}
+
 func TestTaskRelayAffinitySkipKeepsChannelBeforeCooldown(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
