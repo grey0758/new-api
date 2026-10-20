@@ -11,6 +11,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/diagnostics/channeltrace"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
@@ -93,6 +94,7 @@ func rejectOversizedResponsesCompaction(c *gin.Context, relayFormat types.RelayF
 }
 
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+	defer channeltrace.Begin(c)()
 
 	requestId := c.GetString(common.RequestIdKey)
 	//group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
@@ -302,6 +304,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				break
 			}
 
+			channeltrace.Select(c, channel.Id)
 			addUsedChannel(c, channel.Id)
 			bodyStorage, bodyErr := common.GetBodyStorage(c)
 			if bodyErr != nil {
@@ -324,6 +327,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				newAPIError = geminiRelayHandler(c, relayInfo)
 			default:
 				newAPIError = relayHandler(c, relayInfo)
+			}
+
+			if newAPIError != nil {
+				channeltrace.Result(c, string(newAPIError.GetErrorCode()), newAPIError.StatusCode)
+			} else {
+				channeltrace.Result(c, "", 0)
 			}
 
 			if newAPIError == nil {
@@ -421,7 +430,7 @@ func shouldStartNextRelayChannelSelectionCycle(c *gin.Context, info *relaycommon
 	if info.LastError != nil {
 		retryErr = info.LastError
 	}
-	if retryErr == nil || types.IsSkipRetryError(retryErr) {
+	if retryErr == nil || types.IsSkipRetryError(retryErr) || service.IsClientRequestValidationError(retryErr) || service.IsRequestScopedUpstreamRejectionError(retryErr) {
 		return false
 	}
 	if service.IsTransientRelayFailoverError(retryErr) {
@@ -522,14 +531,14 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int, c
 	if openaiErr == nil {
 		return false
 	}
+	if service.IsClientRequestValidationError(openaiErr) || service.IsRequestScopedUpstreamRejectionError(openaiErr) {
+		return false
+	}
 	if types.IsChannelError(openaiErr) {
 		service.ClearCurrentChannelAffinity(c)
 		return true
 	}
 	if types.IsSkipRetryError(openaiErr) {
-		return false
-	}
-	if service.IsClientRequestValidationError(openaiErr) {
 		return false
 	}
 	if retryTimes <= 0 {
@@ -553,6 +562,9 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int, c
 
 func shouldRetryRelayError(openaiErr *types.NewAPIError) bool {
 	if openaiErr == nil {
+		return false
+	}
+	if service.IsClientRequestValidationError(openaiErr) || service.IsRequestScopedUpstreamRejectionError(openaiErr) {
 		return false
 	}
 	code := openaiErr.StatusCode

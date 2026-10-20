@@ -26,3 +26,18 @@ func TestHistoryIDErrorPreservesCauseAndStopsSelection(t *testing.T) {
 	require.Equal(t, service.ResponsesHistoryIDErrorCode, visible.GetErrorCode())
 	require.Contains(t, visible.ToOpenAIError().Message, "original compatible route")
 }
+
+// A configurable retry status must not replay a terminal tool continuation or
+// resubmit an explicit policy rejection to another upstream.
+func TestTerminalAndPolicyRejectionsNeverStartAnotherAttempt(t *testing.T) {
+	for _, code := range []string{"outer_tool_turn_terminated", "bound_account_unavailable", "content_policy_violation", "cyber_policy"} {
+		t.Run(code, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+			upstream := types.WithOpenAIError(types.OpenAIError{Code: code, Message: "synthetic provider rejection", Type: "server_error"}, 503)
+			info := &relaycommon.RelayInfo{LastError: upstream, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 81}}
+			require.False(t, shouldRetry(c, upstream, 5, 81))
+			require.False(t, shouldStartNextRelayChannelSelectionCycle(c, info, upstream, 0))
+		})
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	common2 "github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/diagnostics/channeltrace"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
@@ -501,7 +502,9 @@ func sendPingData(c *gin.Context, mutex *sync.Mutex) error {
 func DoRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
 	return doRequest(c, req, info)
 }
-func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
+func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (resp *http.Response, requestErr error) {
+	finishTrace := channeltrace.HTTP(c, req, info.ChannelId)
+	defer func() { finishTrace(resp, requestErr) }()
 	var client *http.Client
 	var err error
 	if info.ChannelSetting.Proxy != "" {

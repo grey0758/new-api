@@ -838,6 +838,7 @@ type OpenAIResponsesRequest struct {
 	Model              string          `json:"model"`
 	Input              json.RawMessage `json:"input,omitempty"`
 	Include            json.RawMessage `json:"include,omitempty"`
+	AccessPrograms     json.RawMessage `json:"access_programs,omitempty"`
 	Background         *bool           `json:"background,omitempty"`
 	Conversation       json.RawMessage `json:"conversation,omitempty"`
 	ContextManagement  json.RawMessage `json:"context_management,omitempty"`
@@ -855,6 +856,7 @@ type OpenAIResponsesRequest struct {
 	// Store controls whether upstream may store request/response data.
 	// This field is allowed by default and can be disabled via channel setting disable_store.
 	Store                json.RawMessage `json:"store,omitempty"`
+	PromptCacheOptions   json.RawMessage `json:"prompt_cache_options,omitempty"`
 	PromptCacheKey       json.RawMessage `json:"prompt_cache_key,omitempty"`
 	PromptCacheRetention json.RawMessage `json:"prompt_cache_retention,omitempty"`
 	// SafetyIdentifier carries client identity for policy abuse detection.
@@ -955,8 +957,11 @@ func (r *OpenAIResponsesRequest) GetToolsMap() []map[string]any {
 }
 
 type Reasoning struct {
-	Effort  string `json:"effort,omitempty"`
-	Summary string `json:"summary,omitempty"`
+	// Context selects which compatible reasoning items remain available across turns.
+	Context json.RawMessage `json:"context,omitempty"`
+	Mode    json.RawMessage `json:"mode,omitempty"`
+	Effort  string          `json:"effort,omitempty"`
+	Summary string          `json:"summary,omitempty"`
 }
 
 type Input struct {
