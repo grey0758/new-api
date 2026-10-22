@@ -91,3 +91,10 @@ The Go directive and digest-pinned Docker builder now use Go1.26.10, the fixed
 patch release. Complete local Go tests and the unchanged govulncheck v1.6.0
 gate both pass. The first candidate tag remains immutable and is not a
 production deployment; the replacement release must pass all existing gates.
+
+The second candidate passed Go/Web and CodeQL, but Trivy subsequently found
+CVE-2026-111755 and CVE-2026-111756 in the frontend's transitive
+`follow-redirects@1.16.0`. Its existing override mechanism now pins1.16.1, with
+a Bun-generated integrity entry and all unrelated lock entries preserved.
+Frozen install, all four frontend regression groups and production Vite build
+pass. Neither failed candidate was deployed and no security gate was skipped.
