@@ -414,6 +414,10 @@ func maxRelayChannelSelectionCycles(c *gin.Context, info *relaycommon.RelayInfo)
 }
 
 func shouldStartNextRelayChannelSelectionCycle(c *gin.Context, info *relaycommon.RelayInfo, err *types.NewAPIError, cycle int) bool {
+	if service.NativeResponsesRouteClaimed(c) {
+		return false
+	}
+
 	if info.IsOuterToolsStream() && c != nil && c.Request != nil && c.Request.Context().Err() != nil {
 		return false
 	}
@@ -528,6 +532,10 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 }
 
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int, channelId int) bool {
+	if service.NativeResponsesRouteClaimed(c) {
+		return false
+	}
+
 	if openaiErr == nil {
 		return false
 	}
@@ -624,6 +632,7 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 			adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
 		}
 		service.AppendChannelAffinityAdminInfo(c, adminInfo)
+		service.AppendNativeResponsesRouteInfo(c, adminInfo)
 		other["admin_info"] = adminInfo
 		other = service.AppendSecurityAuditToOther(c, other)
 		startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
