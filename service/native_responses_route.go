@@ -69,6 +69,14 @@ var nativeRoutes = struct {
 	entries map[string]string
 }{entries: make(map[string]string)}
 
+// Keep optional routing persistence independent of the application's existing
+// quota/token caches. Enabling this guard must not enable unrelated Redis use.
+var nativeRouteRedis = struct {
+	sync.Mutex
+	url    string
+	client *redis.Client
+}{}
+
 func nativeDigest(v any) string {
 	b, _ := common.Marshal(v)
 	return fmt.Sprintf("%x", sha256.Sum256(b))
@@ -172,21 +180,56 @@ func nativeBoundary(c *gin.Context, model string) *nativeRouteBoundary {
 	return &nativeRouteBoundary{Key: nativeDigest([]any{os.Getenv("CODEX_NATIVE_ROUTE_GUARD_NAMESPACE"), c.GetInt("id"), key}), Turn: nativeDigest(turn), History: history, Safe: safe, Compact: compact}
 }
 
-func nativeRegistryReady() bool {
-	if common.RedisEnabled && common.RDB == nil {
-		return false
+func nativeRouteRedisClient() (*redis.Client, error) {
+	required := common.GetEnvOrDefaultBool("CODEX_NATIVE_ROUTE_GUARD_REQUIRE_REDIS", false)
+	raw := os.Getenv("CODEX_NATIVE_ROUTE_GUARD_REDIS_URL")
+	if (required || raw != "") && os.Getenv("CODEX_NATIVE_ROUTE_GUARD_NAMESPACE") == "" {
+		return nil, errors.New("native_route_namespace_required")
 	}
-	return !common.GetEnvOrDefaultBool("CODEX_NATIVE_ROUTE_GUARD_REQUIRE_REDIS", false) || common.RedisEnabled && common.RDB != nil && os.Getenv("CODEX_NATIVE_ROUTE_GUARD_NAMESPACE") != ""
+	if raw != "" {
+		nativeRouteRedis.Lock()
+		defer nativeRouteRedis.Unlock()
+		if nativeRouteRedis.client != nil && nativeRouteRedis.url == raw {
+			return nativeRouteRedis.client, nil
+		}
+		// Never include ParseURL's error: it can contain the connection secret.
+		if !strings.HasPrefix(raw, "redis://") && !strings.HasPrefix(raw, "rediss://") {
+			return nil, errors.New("native_route_redis_configuration_invalid")
+		}
+		opt, err := redis.ParseURL(raw)
+		if err != nil {
+			return nil, errors.New("native_route_redis_configuration_invalid")
+		}
+		opt.PoolSize, opt.MaxRetries = 4, -1
+		opt.DialTimeout, opt.ReadTimeout, opt.WriteTimeout = 2*time.Second, 2*time.Second, 2*time.Second
+		client := redis.NewClient(opt)
+		if nativeRouteRedis.client != nil {
+			_ = nativeRouteRedis.client.Close()
+		}
+		nativeRouteRedis.url, nativeRouteRedis.client = raw, client
+		return client, nil
+	}
+	if common.RedisEnabled {
+		if common.RDB == nil {
+			return nil, errors.New("native_route_redis_unavailable")
+		}
+		return common.RDB, nil
+	}
+	if required {
+		return nil, errors.New("native_route_redis_required")
+	}
+	return nil, nil
 }
 func readNativeRoute(key string) (*nativeRouteRecord, string, error) {
-	if !nativeRegistryReady() {
-		return nil, "", errors.New("native_route_registry_unavailable")
+	rdb, err := nativeRouteRedisClient()
+	if err != nil {
+		return nil, "", err
 	}
 	var raw string
-	if common.RedisEnabled && common.RDB != nil {
+	if rdb != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		v, err := common.RDB.Get(ctx, nativeRouteNamespace+key).Result()
+		v, err := rdb.Get(ctx, nativeRouteNamespace+key).Result()
 		if errors.Is(err, redis.Nil) {
 			return nil, "", nil
 		}
@@ -231,18 +274,19 @@ redis.call('EXPIRE',KEYS[2],ARGV[3])
 return 1`
 
 func writeNativeRoute(key, expected string, record nativeRouteRecord) (bool, error) {
-	if !nativeRegistryReady() {
-		return false, errors.New("native_route_registry_unavailable")
+	rdb, err := nativeRouteRedisClient()
+	if err != nil {
+		return false, err
 	}
 	b, err := common.Marshal(record)
 	if err != nil {
 		return false, err
 	}
 	raw := string(b)
-	if common.RedisEnabled && common.RDB != nil {
+	if rdb != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		n, err := common.RDB.Eval(ctx, nativeRouteCAS, []string{nativeRouteNamespace + key, nativeRouteNamespace + "index"}, expected, raw, int(nativeRouteTTL.Seconds()), time.Now().Unix(), nativeRouteCapacity).Int()
+		n, err := rdb.Eval(ctx, nativeRouteCAS, []string{nativeRouteNamespace + key, nativeRouteNamespace + "index"}, expected, raw, int(nativeRouteTTL.Seconds()), time.Now().Unix(), nativeRouteCapacity).Int()
 		if err != nil {
 			return false, err
 		}

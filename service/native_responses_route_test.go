@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -23,6 +24,7 @@ import (
 func nativeTestSetup(t *testing.T) {
 	t.Helper()
 	t.Setenv("CODEX_NATIVE_ROUTE_GUARD_ENABLED", "true")
+	t.Setenv("CODEX_NATIVE_ROUTE_GUARD_REDIS_URL", "")
 	prior := common.RedisEnabled
 	common.RedisEnabled = false
 	nativeRoutes.Lock()
@@ -34,6 +36,50 @@ func nativeTestSetup(t *testing.T) {
 		nativeRoutes.entries = make(map[string]string)
 		nativeRoutes.Unlock()
 	})
+}
+
+func TestNativeRouteDedicatedRedisConfigurationFailsClosedWithoutSecretDisclosure(t *testing.T) {
+	nativeTestSetup(t)
+	t.Setenv("CODEX_NATIVE_ROUTE_GUARD_NAMESPACE", "test-dedicated-config")
+	for _, value := range []string{"https://native-private:do-not-leak@invalid", "redis://native-private:do-not-leak@localhost:invalid"} {
+		t.Setenv("CODEX_NATIVE_ROUTE_GUARD_REDIS_URL", value)
+		_, err := nativeRouteRedisClient()
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), "do-not-leak")
+		require.NotContains(t, err.Error(), "native-private")
+		_, _, err = readNativeRoute("never-create")
+		require.Error(t, err)
+	}
+	t.Setenv("CODEX_NATIVE_ROUTE_GUARD_REDIS_URL", "redis://127.0.0.1:6379")
+	t.Setenv("CODEX_NATIVE_ROUTE_GUARD_NAMESPACE", "")
+	_, err := nativeRouteRedisClient()
+	require.Error(t, err)
+	require.Empty(t, nativeRoutes.entries)
+}
+
+func TestNativeRouteDedicatedRedisOutageNeverEnablesApplicationCacheOrMemoryFallback(t *testing.T) {
+	nativeTestSetup(t)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	address := listener.Addr().String()
+	require.NoError(t, listener.Close())
+	t.Setenv("CODEX_NATIVE_ROUTE_GUARD_REDIS_URL", "redis://"+address)
+	t.Setenv("CODEX_NATIVE_ROUTE_GUARD_REQUIRE_REDIS", "true")
+	t.Setenv("CODEX_NATIVE_ROUTE_GUARD_NAMESPACE", "test-dedicated-outage")
+	prior := common.RDB
+	client, err := nativeRouteRedisClient()
+	require.NoError(t, err)
+	require.NotNil(t, client)
+	require.False(t, common.RedisEnabled)
+	require.Same(t, prior, common.RDB)
+	_, err = writeNativeRoute("no-fallback", "", nativeRouteRecord{})
+	require.Error(t, err)
+	require.Empty(t, nativeRoutes.entries)
+	c := nativeTestContext(t, 1, "one", "protest", []any{nativeUser("private")})
+	_, e := PreferredNativeResponsesRoute(c, "native-test")
+	require.NotNil(t, e)
+	require.Equal(t, "native_route_registry_unavailable", string(e.GetErrorCode()))
+	require.Equal(t, http.StatusServiceUnavailable, e.StatusCode)
 }
 func nativeTestBody(turn string, items []any) string {
 	b, _ := common.Marshal(map[string]any{"model": "gpt-6.1-sol", "prompt_cache_key": "test-private-session", "client_metadata": map[string]any{"session_id": "test-private-session", "turn_id": turn}, "input": items, "store": false, "stream": true})
@@ -369,4 +415,56 @@ func TestNativeRouteRedisCASAndTTLOnIsolatedRedis(t *testing.T) {
 	ttl, err := common.RDB.TTL(context.Background(), nativeRouteNamespace+key).Result()
 	require.NoError(t, err)
 	require.InDelta(t, nativeRouteTTL.Seconds(), ttl.Seconds(), 5)
+}
+
+func TestNativeRouteRedisCASAndTTLOnDedicatedRedisWithApplicationCacheDisabled(t *testing.T) {
+	address := os.Getenv("NATIVE_ROUTE_TEST_REDIS_ADDR")
+	if address == "" {
+		t.Skip("requires an isolated Redis instance, never production")
+	}
+	nativeTestSetup(t)
+	t.Setenv("CODEX_NATIVE_ROUTE_GUARD_REDIS_URL", "redis://"+address)
+	t.Setenv("CODEX_NATIVE_ROUTE_GUARD_REQUIRE_REDIS", "true")
+	t.Setenv("CODEX_NATIVE_ROUTE_GUARD_NAMESPACE", "test-dedicated-cas")
+	prior := common.RDB
+	client, err := nativeRouteRedisClient()
+	require.NoError(t, err)
+	require.False(t, common.RedisEnabled)
+	require.Same(t, prior, common.RDB)
+	key := "dedicated-test-" + common.GetUUID()
+	t.Cleanup(func() {
+		client.Del(context.Background(), nativeRouteNamespace+key)
+		client.ZRem(context.Background(), nativeRouteNamespace+"index", nativeRouteNamespace+key)
+	})
+	record := nativeRouteRecord{Group: "a", Channel: 71, Turn: nativeDigest("one"), State: "paused", HistoryCount: 1, HistoryDigest: nativeDigest([]string{"one"}), Expires: time.Now().Add(nativeRouteTTL).Unix()}
+	ok, err := writeNativeRoute(key, "", record)
+	require.NoError(t, err)
+	require.True(t, ok)
+	r, raw, err := readNativeRoute(key)
+	require.NoError(t, err)
+	require.Equal(t, 71, r.Channel)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	winners := 0
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			copy := record
+			copy.Lease = fmt.Sprint(i)
+			ok, e := writeNativeRoute(key, raw, copy)
+			if e == nil && ok {
+				mu.Lock()
+				winners++
+				mu.Unlock()
+			}
+		}(i)
+	}
+	wg.Wait()
+	require.Equal(t, 1, winners)
+	ttl, err := client.TTL(context.Background(), nativeRouteNamespace+key).Result()
+	require.NoError(t, err)
+	require.InDelta(t, nativeRouteTTL.Seconds(), ttl.Seconds(), 5)
+	require.False(t, common.RedisEnabled)
+	require.Same(t, prior, common.RDB)
 }

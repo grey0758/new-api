@@ -34,19 +34,35 @@ matching `prompt_cache_key`. Other API requests retain existing routing.
 
 ## Configuration and storage
 
-Production3001 uses these three values through the inspect-backed release
+Production3001 uses these four values through the inspect-backed release
 inventory's private env override, not a reduced container command:
 
 ```text
 CODEX_NATIVE_ROUTE_GUARD_ENABLED=true
 CODEX_NATIVE_ROUTE_GUARD_REQUIRE_REDIS=true
 CODEX_NATIVE_ROUTE_GUARD_NAMESPACE=opencodex-uk-3001
+CODEX_NATIVE_ROUTE_GUARD_REDIS_URL=<private dedicated Redis URL>
 ```
 
 The namespace must uniquely identify the user ledger. Session ownership is
 scoped by namespace and authenticated user, independently of token, model and
 group changes. Production requires shared Redis; unavailable/corrupt registry
 state fails503 before dispatch, with no process-local fallback.
+
+`CODEX_NATIVE_ROUTE_GUARD_REDIS_URL` selects an independent bounded client pool.
+It takes precedence over the optional application Redis connection and does not
+turn on unrelated quota, token, user or channel caches. Only redis/rediss URLs
+are accepted; configuration errors never expose their connection secret. An
+explicit or required store that fails is never replaced by process-local state.
+Without the dedicated URL, an already enabled application Redis may be reused;
+production still requires a nonempty ledger namespace. Do not enable a global
+application cache to satisfy this guard.
+
+The production dependency has no published port, a prefix-restricted ACL,
+128MiB noeviction limit within a192MiB container limit, bounded Docker logs and
+AOF with appendfsync always. AOF write failure and capacity errors fail closed.
+Its credential is held in OpenBao and the protected release runtime env file;
+it must never be copied into the release plan, this document or logs.
 
 Records contain routing metadata, history/turn digests and an opaque epoch;
 they contain no prompt, tool payload, OAuth or API credential. Atomic Redis
