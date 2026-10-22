@@ -82,3 +82,12 @@ The old distributor fails both independent authorization/epoch regressions.
 Local complete Go, focused race, CI/Web/Docker/security, signed immutable
 amd64 image, SLSA/SPDX and scoped3001 blue/green acceptance are required before
 production activation. Passing tests do not by themselves mean deployed.
+
+## Release toolchain qualification (2026-10-22 UTC)
+
+The first candidate's complete Go suite passed, but the mandatory vulnerability
+gate rejected Go1.26.9 for GO-2026-6809 (`crypto/x509.Certificate.Verify`).
+The Go directive and digest-pinned Docker builder now use Go1.26.10, the fixed
+patch release. Complete local Go tests and the unchanged govulncheck v1.6.0
+gate both pass. The first candidate tag remains immutable and is not a
+production deployment; the replacement release must pass all existing gates.
