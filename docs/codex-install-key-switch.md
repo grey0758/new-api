@@ -17,8 +17,12 @@ launchers read the private `opencodex-env.json`. Setup updates both Process and
 User environment, prepends the launcher directory to PATH, updates the current
 PowerShell alias and performs file-backed Codex login. It supports Windows
 PowerShell 5 and protects the configuration and credential files with user-only
-ACLs. It never kills existing Codex processes or changes CurrentUser execution
-policy. Both R2 and official downloads use the same credential setup.
+ACLs. The command entry invokes its sibling PowerShell script with Process
+Bypass, so fresh PowerShell sessions do not require a CurrentUser policy change.
+The relative sibling path also supports non-ASCII user directories. An existing
+local `codex.ps1` shim is backed up before the cmd entry takes precedence.
+It never kills existing Codex processes. Both R2 and official downloads use the
+same credential setup.
 
 Paste the updated command into the terminal used to start Codex. Other terminals
 that already resolve an older npm installation must be reopened. A running

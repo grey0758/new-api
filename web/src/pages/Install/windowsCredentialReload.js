@@ -20,10 +20,13 @@ const setup = [
   "[System.IO.File]::WriteAllText((Join-Path $codexDir 'opencodex-env.json'), ($envSettings | ConvertTo-Json -Depth 3), $utf8NoBom)",
   "$codexBinDir = Join-Path $HOME '.local\\bin'",
   'New-Item -ItemType Directory -Force -Path $codexBinDir | Out-Null',
-  "$launchPath = Join-Path $codexBinDir 'codex.ps1'",
+  "$launchPath = Join-Path $codexBinDir 'opencodex-launch.ps1'",
   `[System.IO.File]::WriteAllText($launchPath, ${psQuote(launchScript)}, $utf8NoBom)`,
   "$cmdPath = Join-Path $codexBinDir 'codex.cmd'",
-  `[System.IO.File]::WriteAllLines($cmdPath, @('@echo off', ('powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + $launchPath + '" %*')), [System.Text.Encoding]::ASCII)`,
+  // Resolve a cmd entry in fresh PowerShell sessions, including Restricted
+  // policy. A sibling path also preserves non-ASCII Windows user names.
+  `[System.IO.File]::WriteAllLines($cmdPath, @('@echo off', 'powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0opencodex-launch.ps1" %*'), [System.Text.Encoding]::ASCII)`,
+  "$legacyLauncher = Join-Path $codexBinDir 'codex.ps1'; if (Test-Path -LiteralPath $legacyLauncher) { $shimBackup = Join-Path $codexDir ('install-launcher-backup-' + [guid]::NewGuid().ToString('N') + '.ps1'); Move-Item -LiteralPath $legacyLauncher -Destination $shimBackup }",
   "$userPath = [Environment]::GetEnvironmentVariable('Path','User')",
   "$userParts = @($userPath -split ';' | Where-Object { $_ -and $_.TrimEnd('\\') -ne $codexBinDir.TrimEnd('\\') })",
   "[Environment]::SetEnvironmentVariable('Path', ((@($codexBinDir) + $userParts) -join ';'), 'User')",
@@ -38,8 +41,8 @@ const setup = [
   "if ($loginExit -ne 0) { throw 'Codex API-key login failed' }",
   '$currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent().Name',
   "foreach ($file in @('opencodex-env.json','auth.json','config.toml','config.json')) { $privatePath = Join-Path $codexDir $file; if (Test-Path -LiteralPath $privatePath) { & icacls.exe $privatePath /inheritance:r /grant:r ($currentIdentity + ':F') /Q 2>$null | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'Could not protect Codex credentials' } } }",
-  'Set-Alias -Name codex -Value $launchPath -Scope Global',
-  '$codexCmd = [pscustomobject]@{ Source = $launchPath }',
+  'Set-Alias -Name codex -Value $cmdPath -Scope Global',
+  '$codexCmd = [pscustomobject]@{ Source = $cmdPath }',
 ].join('; ');
 
 export function withWindowsCredentialReload(command) {

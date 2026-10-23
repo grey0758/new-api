@@ -161,7 +161,7 @@ assert(
     ) &&
     windowsCommand.includes('opencodex-env.json') &&
     windowsCommand.includes(
-      'Set-Alias -Name codex -Value $launchPath -Scope Global',
+      'Set-Alias -Name codex -Value $cmdPath -Scope Global',
     ),
   'windows command must launch Codex from the per-user workspace',
 );
@@ -170,6 +170,10 @@ assert(
   'key updates must not kill live sessions',
 );
 assert(!windowsCommand.includes('Set-ExecutionPolicy -Scope CurrentUser'));
+assert(windowsCommand.includes('%~dp0opencodex-launch.ps1'));
+assert(
+  !windowsCommand.includes("$launchPath = Join-Path $codexBinDir 'codex.ps1'"),
+);
 assert(
   windowsCommand.includes(
     String.raw`('[projects."' + $workDir.Replace('\','/') + '"]')`,
