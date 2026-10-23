@@ -18,13 +18,6 @@ func DecodeJson(reader io.Reader, v any) error {
 	return json.NewDecoder(reader).Decode(v)
 }
 
-// DecodeJsonWithNumber preserves exact numbers when hashing opaque history.
-func DecodeJsonWithNumber(reader io.Reader, v any) error {
-	decoder := json.NewDecoder(reader)
-	decoder.UseNumber()
-	return decoder.Decode(v)
-}
-
 func Marshal(v any) ([]byte, error) {
 	return json.Marshal(v)
 }

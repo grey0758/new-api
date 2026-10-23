@@ -47,8 +47,6 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
-	service.ObserveNativeResponsesOutcome(c, &responsesResponse)
-
 	if responsesResponse.HasImageGenerationCall() {
 		c.Set("image_generation_call", true)
 		c.Set("image_generation_call_quality", responsesResponse.GetQuality())
@@ -126,9 +124,6 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		if streamResponse.Response != nil && streamResponse.Response.ID != "" {
 			c.Set("relay_response_id", streamResponse.Response.ID)
 		}
-		if streamResponse.Type == "response.completed" {
-			service.ObserveNativeResponsesOutcome(c, streamResponse.Response)
-		}
 		switch streamResponse.Type {
 		case "response.completed":
 			completed = true
@@ -181,7 +176,6 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 
 		if isResponsesStreamFatalEvent(streamResponse) {
-			service.ObserveNativeResponsesOutcome(c, streamResponse.Response)
 			streamErr = responsesStreamFatalEventNewAPIError(streamResponse)
 			service.RecordResponsesStreamGuard(c, modelName)
 			if info.SendResponseCount == 0 && c != nil && c.Writer != nil && !c.Writer.Written() {

@@ -127,18 +127,6 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		return openai.NewResponsesInputImageError(err)
 	}
 
-	if service.NativeResponsesRouteClaimed(c) && strings.HasSuffix(strings.TrimRight(strings.TrimSpace(info.ChannelBaseUrl), "/"), "/outer-tools") {
-		raw, readErr := io.ReadAll(requestBody)
-		if readErr != nil {
-			return types.NewError(readErr, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
-		}
-		raw, readErr = service.ApplyNativeResponsesRouteKey(c, raw, true)
-		if readErr != nil {
-			return types.NewError(readErr, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-		requestBody = bytes.NewReader(raw)
-	}
-
 	var httpResp *http.Response
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {

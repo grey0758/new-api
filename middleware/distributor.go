@@ -67,12 +67,6 @@ func Distribute() func(c *gin.Context) {
 			abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
 			return
 		}
-		nativePreferred, nativeErr := service.PreferredNativeResponsesRoute(c, modelRequest.Model)
-		if nativeErr != nil {
-			service.LogNativeResponsesRouteRejection(c, nativeErr.GetErrorCode())
-			abortWithOpenAiMessage(c, nativeErr.StatusCode, nativeErr.Error(), nativeErr.GetErrorCode())
-			return
-		}
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
 			if err != nil {
@@ -145,33 +139,7 @@ func Distribute() func(c *gin.Context) {
 					}
 				}
 
-				if nativePreferred > 0 {
-					preferred, lookupErr := model.CacheGetChannel(nativePreferred)
-					if lookupErr == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled && channelAllowedForDistribution(c.Request.URL.Path, preferred, &unsupportedEndpointSeen) {
-						if usingGroup == "auto" {
-							for _, group := range service.GetUserAutoGroup(common.GetContextKeyString(c, constant.ContextKeyUserGroup)) {
-								if isChannelEnabledForRequestModel(c.Request.URL.Path, group, modelRequest.Model, preferred) {
-									channel = preferred
-									common.SetContextKey(c, constant.ContextKeyAutoGroup, group)
-									break
-								}
-							}
-						} else if isChannelEnabledForRequestModel(c.Request.URL.Path, usingGroup, modelRequest.Model, preferred) {
-							channel = preferred
-						}
-					}
-					if channel == nil {
-						service.LogNativeResponsesRouteRejection(c, service.NativeRouteChangedCode)
-						abortWithOpenAiMessage(c, http.StatusBadRequest, service.NativeRouteChangedMessage, service.NativeRouteChangedCode)
-						return
-					}
-					if service.IsChannelCoolingDown(channel.Id) {
-						service.LogNativeResponsesRouteRejection(c, "native_route_temporarily_unavailable")
-						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, "The original native route is temporarily cooling down. No request or tool result was dispatched. Retry on the same authorized route.", "native_route_temporarily_unavailable")
-						return
-					}
-				}
-				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found && channel == nil {
+				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					if err == nil && preferred != nil {
 						if service.ShouldSkipChannelForResponsesStreamFailover(c, modelRequest.Model, preferred.Id) {
@@ -259,14 +227,6 @@ func Distribute() func(c *gin.Context) {
 					}
 				}
 			}
-		}
-		if channel != nil {
-			if routeErr := service.AdmitNativeResponsesRoute(c, service.NativeResponsesEffectiveGroup(c), channel.Id); routeErr != nil {
-				service.LogNativeResponsesRouteRejection(c, routeErr.GetErrorCode())
-				abortWithOpenAiMessage(c, routeErr.StatusCode, routeErr.Error(), routeErr.GetErrorCode())
-				return
-			}
-			defer service.FinishNativeResponsesRoute(c)
 		}
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
 		SetupContextForSelectedChannel(c, channel, modelRequest.Model)
