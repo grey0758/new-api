@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -939,6 +940,27 @@ func probeAndRecoverChannelCooldown(channelId int, channelName string, modelName
 		}
 		return
 	}
+	handleChannelCooldownProbeFailure(channelId, channelName, modelName, mode, err)
+}
+
+// A probe must not promote a bounded account-local admission failure into a
+// channel-wide outage. Retain any pre-existing real cooldown until a probe
+// succeeds; skipping this observation is never proof of provider recovery.
+func handleChannelCooldownProbeFailure(channelId int, channelName string, modelName string, mode string, err error) {
+	var probeErr *channelProbeHTTPError
+	if errors.As(err, &probeErr) && isProviderLocalProbeCode(probeErr.code) {
+		channelCooldownMu.Lock()
+		entry := channelCooldownLocal[channelId]
+		entry.probing = false
+		entry.lastFailureAt = time.Now()
+		entry.lastError = probeErr.Error()
+		channelCooldownLocal[channelId] = entry
+		channelCooldownMu.Unlock()
+		RecordChannelCooldownHealthEvent(ChannelHealthEventProbeSkipped, channelId, channelName, modelName, probeErr.Error(), map[string]interface{}{
+			"probe_mode": mode, "skip_reason": "provider_local_admission", "status_code": probeErr.status, "error_code": probeErr.code,
+		})
+		return
+	}
 	if mode == channelProbeModeContinuous {
 		markChannelCoolingFromActiveProbeFailure(channelId, channelName, modelName, err)
 		RecordChannelCooldownHealthEvent(ChannelHealthEventNewAPICooling, channelId, channelName, modelName, "常规主动探针失败，进入 NewAPI 渠道冷却", map[string]interface{}{
@@ -969,6 +991,26 @@ func probeAndRecoverChannelCooldown(channelId int, channelName string, modelName
 		"probe_mode": mode,
 	})
 	common.SysLog(fmt.Sprintf("通道 #%d 冷却主动探测未通过: %s", channelId, err.Error()))
+}
+
+type channelProbeHTTPError struct {
+	status int
+	code   string
+}
+
+func (e *channelProbeHTTPError) Error() string {
+	if e.code == "" {
+		return fmt.Sprintf("probe status %d", e.status)
+	}
+	return fmt.Sprintf("probe status %d (%s)", e.status, e.code)
+}
+
+func isProviderLocalProbeCode(code string) bool {
+	switch code {
+	case "relay_shard_cooldown", "relay_pool_unavailable", "relay_pool_queue_full", "relay_pool_queue_timeout", "relay_busy", "codex_failed", "codex_timeout", "us003_transport_failed", "us003_transport_unavailable":
+		return true
+	}
+	return false
 }
 
 func markChannelProbeSucceeded(channelId int, channelName string) bool {
@@ -1208,8 +1250,18 @@ func probeOpenAIResponsesStream(channel *model.Channel, modelName string, timeou
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("probe status %d", resp.StatusCode)
+		// Preserve only a fixed known cause, never a raw provider message/body.
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		var envelope struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		code := ""
+		if common.Unmarshal(data, &envelope) == nil && isProviderLocalProbeCode(envelope.Error.Code) && (resp.StatusCode == 429 || resp.StatusCode >= 500) {
+			code = envelope.Error.Code
+		}
+		return &channelProbeHTTPError{status: resp.StatusCode, code: code}
 	}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 1024), 1024*1024)
