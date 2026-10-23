@@ -40,6 +40,6 @@ func NormalizeResponsesHistoryIDError(err *types.NewAPIError) *types.NewAPIError
 	return types.WithOpenAIError(types.OpenAIError{
 		Type:    "invalid_request_error",
 		Code:    string(ResponsesHistoryIDErrorCode),
-		Message: "Conversation history item ID format is incompatible with the selected provider (invalid_id_prefix). Resume through the original compatible route with a new complete user turn. Do not resend tool outputs or repeat completed operations.",
+		Message: "Conversation history item ID format is incompatible with the selected provider (invalid_id_prefix). Keep the original session and report this error for history compatibility repair. Do not resend tool outputs or repeat completed operations.",
 	}, http.StatusBadRequest, types.ErrOptionWithSkipRetry(), types.ErrOptionWithPreserveUserError())
 }

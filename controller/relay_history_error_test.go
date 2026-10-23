@@ -24,7 +24,7 @@ func TestHistoryIDErrorPreservesCauseAndStopsSelection(t *testing.T) {
 	visible := sanitizeRelayErrorForUser(c, err)
 	require.Equal(t, 400, visible.StatusCode)
 	require.Equal(t, service.ResponsesHistoryIDErrorCode, visible.GetErrorCode())
-	require.Contains(t, visible.ToOpenAIError().Message, "original compatible route")
+	require.Contains(t, visible.ToOpenAIError().Message, "Keep the original session")
 }
 
 // A configurable retry status must not replay a terminal tool continuation or

@@ -15,8 +15,9 @@ import (
 )
 
 // PrepareResponsesHistoryBody handles the Krill Codex validator's rejection of
-// legacy fc_/fco_ item IDs on custom tool call/output history. The input schema
-// makes this item ID optional; call_id is the tool-result correlation identity.
+// legacy fc_/fco_ custom-tool IDs and generic item_ assistant-message
+// IDs. Self-contained assistant inputs do not require a persisted item ID;
+// call_id remains the tool-result correlation identity.
 // Only the outbound, explicitly stateless request is changed. Never rewrite
 // call_id, outputs, stored-response references, or the caller's retained history.
 // Run after both conversion and passthrough selection, before the first send.
@@ -91,6 +92,11 @@ func normalizeKrillCustomToolHistory(raw []byte) ([]byte, error) {
 			legacyPrefix = "fc_"
 		case "custom_tool_call_output":
 			legacyPrefix = "fco_"
+		case "message":
+			if !isCompleteAssistantHistoryMessage(item) {
+				continue
+			}
+			legacyPrefix = "item_"
 		default:
 			continue
 		}
@@ -101,7 +107,7 @@ func normalizeKrillCustomToolHistory(raw []byte) ([]byte, error) {
 		if counts[id.Str] != 1 || references[id.Str] {
 			continue
 		}
-		if item.Get("call_id").Type != gjson.String || item.Get("call_id").Str == "" {
+		if kind != "message" && (item.Get("call_id").Type != gjson.String || item.Get("call_id").Str == "") {
 			continue
 		}
 		if kind == "custom_tool_call" && (item.Get("name").Type != gjson.String || item.Get("name").Str == "" || item.Get("input").Type != gjson.String) {
@@ -113,8 +119,36 @@ func normalizeKrillCustomToolHistory(raw []byte) ([]byte, error) {
 		var err error
 		normalized, err = sjson.DeleteBytes(normalized, "input."+strconv.Itoa(index)+".id")
 		if err != nil {
-			return nil, fmt.Errorf("normalize optional custom tool item ID: %w", err)
+			return nil, fmt.Errorf("normalize optional history item ID: %w", err)
 		}
 	}
 	return normalized, nil
+}
+
+// Only a complete, self-contained assistant message is safe to resend as input
+// without an item ID. Keep partial, referenced, malformed and unknown records
+// unchanged for the provider to validate. Content/phase/annotations are retained.
+func isCompleteAssistantHistoryMessage(item gjson.Result) bool {
+	if item.Get("role").String() != "assistant" || item.Get("status").String() != "completed" {
+		return false
+	}
+	content := item.Get("content")
+	if !content.IsArray() || len(content.Array()) == 0 {
+		return false
+	}
+	for _, part := range content.Array() {
+		switch part.Get("type").String() {
+		case "output_text":
+			if part.Get("text").Type != gjson.String {
+				return false
+			}
+		case "refusal":
+			if part.Get("refusal").Type != gjson.String {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }

@@ -26,7 +26,8 @@ func TestResponsesHistoryIDRejection(t *testing.T) {
 		require.Equal(t, ResponsesHistoryIDErrorCode, err.GetErrorCode())
 		require.True(t, types.IsSkipRetryError(err))
 		require.True(t, types.ShouldPreserveUserError(err))
-		require.Contains(t, err.ToOpenAIError().Message, "original compatible route")
+		require.Contains(t, err.ToOpenAIError().Message, "Keep the original session")
+		require.NotContains(t, err.ToOpenAIError().Message, "original compatible route")
 		require.NotContains(t, err.ToOpenAIError().Message, "fc_synthetic")
 		require.False(t, ShouldDisableChannel(err))
 	}
