@@ -156,9 +156,20 @@ assert(
     windowsCommand.includes(
       '$codexCmd = [pscustomobject]@{ Source = $codexExe }',
     ) &&
-    windowsCommand.includes('Set-Location $workDir; & $codexCmd.Source'),
+    windowsCommand.includes(
+      'Set-Location $workDir; if ($env:OPENCODEX_INSTALL_NO_LAUNCH',
+    ) &&
+    windowsCommand.includes('opencodex-env.json') &&
+    windowsCommand.includes(
+      'Set-Alias -Name codex -Value $launchPath -Scope Global',
+    ),
   'windows command must launch Codex from the per-user workspace',
 );
+assert(
+  !windowsCommand.includes('Stop-Process'),
+  'key updates must not kill live sessions',
+);
+assert(!windowsCommand.includes('Set-ExecutionPolicy -Scope CurrentUser'));
 assert(
   windowsCommand.includes(
     String.raw`('[projects."' + $workDir.Replace('\','/') + '"]')`,
@@ -215,7 +226,7 @@ for (const baseUrl of [
     assert(
       officialCommand.includes(
         platform === 'windows'
-          ? 'npm install -g @openai/codex@latest'
+          ? 'https://api.github.com/repos/openai/codex/releases/latest'
           : 'https://releases.openai.com/codex/install.sh',
       ),
     );

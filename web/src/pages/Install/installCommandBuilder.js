@@ -1,4 +1,5 @@
 import { buildUnixNativeInstallCommand } from './unixNativeInstaller.js';
+import { withWindowsCredentialReload } from './windowsCredentialReload.js';
 import { Laptop, Monitor, Terminal } from 'lucide-react';
 import { installViaCodexMirror } from './codexMirrorInstaller.js';
 
@@ -644,9 +645,9 @@ export function buildInstallCommand(
       reasoningEffort,
       normalizedConfig,
     );
-    return packageSource !== 'official'
-      ? installViaCodexMirror(command, os)
-      : command;
+    return withWindowsCredentialReload(
+      installViaCodexMirror(command, os, packageSource),
+    );
   }
 
   if (os === 'macos') {

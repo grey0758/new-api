@@ -11,7 +11,7 @@ fixture = '''#!/bin/sh
 set -eu
 if [ "${FAIL_INSTALL:-0}" = 1 ]; then exit 19; fi
 mkdir -p "$CODEX_INSTALL_DIR"
-printf '#!/bin/sh\\nif [ "${1:-}" = login ]; then cat >/dev/null; printf "fixture-login" > "$CODEX_HOME/auth.json"; exit 0; fi\\nif [ "${1:-}" = app-server ]; then printf "restarted" > "$CODEX_HOME/daemon-test"; exit 0; fi\\nprintf "codex-cli fixture\\\\n"\\n' > "$CODEX_INSTALL_DIR/codex"
+printf '#!/bin/sh\\nif [ "${1:-}" = login ]; then cat >/dev/null; printf "fixture-login" > "$CODEX_HOME/auth.json"; exit 0; fi\\nif [ "${1:-}" = app-server ]; then printf "restarted" > "$CODEX_HOME/daemon-test"; exit 0; fi\\nif [ "${1:-}" = credential-test ]; then printf "%%s" "$CODEX_API_KEY"; exit 0; fi\\nprintf "codex-cli fixture\\\\n"\\n' > "$CODEX_INSTALL_DIR/codex"
 chmod +x "$CODEX_INSTALL_DIR/codex"
 '''
 cases=0
@@ -49,6 +49,10 @@ with tempfile.TemporaryDirectory(prefix='unix-installer-test-') as td:
     for name in ['env','config.toml']: assert (ch/name).stat().st_mode & 0o777==0o600
     check=subprocess.run(['sh','-c','. "$CODEX_HOME/env"; printf "%s" "$CODEX_API_KEY"'],env=env,text=True,capture_output=True,check=True)
     assert check.stdout==key
+    if platform=='linux':
+     # Deliberately inherit the old key: the installed launcher must reload it.
+     launched=subprocess.run([str(home/'.local/bin/codex'),'credential-test'],env=dict(env,CODEX_API_KEY='DUMMY_EXPIRED',OPENAI_API_KEY='DUMMY_EXPIRED'),text=True,capture_output=True,check=True)
+     assert launched.stdout==key
     assert (home/'.profile').read_text().count('# OpenCodex environment')==1
     assert (home/'.zshenv').read_text().count('# OpenCodex environment')==1
     assert '.claude/env' in (home/'.profile').read_text()

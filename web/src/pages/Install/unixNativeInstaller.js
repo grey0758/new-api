@@ -57,7 +57,7 @@ export function buildUnixNativeInstallCommand({
     `"gpt-5.3-codex" = ${JSON.stringify(model)}`,
   ].join('\n');
   const env = [
-    ...(isMacos ? ['unset API_KEY OPENAI_API_KEY'] : []),
+    'unset API_KEY OPENAI_API_KEY',
     `export CODEX_API_KEY=${shellQuote(apiKey.trim() || 'YOUR_KEY')}`,
     `export BASE_URL=${shellQuote(baseUrl)}`,
     `export MODEL_NAME=${shellQuote(model)}`,
@@ -66,7 +66,7 @@ export function buildUnixNativeInstallCommand({
   const script = [
     'set -eu',
     'umask 077',
-    'for dep in curl tar mktemp awk sed cp mv chmod; do command -v "$dep" >/dev/null 2>&1 || { printf "缺少依赖: %s\\n" "$dep" >&2; exit 1; }; done',
+    'for dep in curl tar mktemp awk sed cp mv chmod readlink; do command -v "$dep" >/dev/null 2>&1 || { printf "缺少依赖: %s\\n" "$dep" >&2; exit 1; }; done',
     'CODEX_HOME_PATH="${CODEX_HOME:-$HOME/.codex}"',
     'export CODEX_HOME="$CODEX_HOME_PATH"',
     `WORK_DIR="$HOME/${config.workspaceName}"`,
@@ -89,7 +89,11 @@ export function buildUnixNativeInstallCommand({
     String.raw`PROJECT_PATH="${'$'}{PROJECT_PATH//$'\t'/\\t}"`,
     `printf '%s\\n' ${toml.split('\n').map(shellQuote).join(' ')} > "$CODEX_HOME_PATH/config.toml.new"`,
     String.raw`printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$PROJECT_PATH" >> "$CODEX_HOME_PATH/config.toml.new"`,
-    ...(isMacos ? [`python3 -c ${shellQuote(mergeMacosConfig)} "$CODEX_HOME_PATH/config.toml" "$CODEX_HOME_PATH/config.toml.new" "$WORK_DIR"`] : []),
+    ...(isMacos
+      ? [
+          `python3 -c ${shellQuote(mergeMacosConfig)} "$CODEX_HOME_PATH/config.toml" "$CODEX_HOME_PATH/config.toml.new" "$WORK_DIR"`,
+        ]
+      : []),
     'chmod 600 "$CODEX_HOME_PATH/config.toml.new"',
     'mv "$CODEX_HOME_PATH/config.toml.new" "$CODEX_HOME_PATH/config.toml"',
     `printf '%s\\n' ${env.split('\n').map(shellQuote).join(' ')} > "$CODEX_HOME_PATH/env.new"`,
@@ -98,14 +102,26 @@ export function buildUnixNativeInstallCommand({
     String.raw`{ printf 'export CODEX_HOME='; quote_sh "$CODEX_HOME_PATH"; printf '\n'; } >> "$CODEX_HOME_PATH/env.new"`,
     'chmod 600 "$CODEX_HOME_PATH/env.new"',
     'mv "$CODEX_HOME_PATH/env.new" "$CODEX_HOME_PATH/env"',
+    ...(!isMacos
+      ? [
+          // Reload the private env on every launch, including from old terminals.
+          'NATIVE_BIN="$(readlink -f "$CODEX_BIN")"',
+          'if [ "$NATIVE_BIN" = "$CODEX_BIN" ]; then mkdir -p "$CODEX_HOME_PATH/bin"; cp -p "$CODEX_BIN" "$CODEX_HOME_PATH/bin/codex-native"; NATIVE_BIN="$CODEX_HOME_PATH/bin/codex-native"; fi',
+          String.raw`{ printf '#!/bin/sh\nset -eu\nif [ -z "${'$'}{CODEX_HOME:-}" ]; then CODEX_HOME='; quote_sh "$CODEX_HOME_PATH"; printf '; fi\nexport CODEX_HOME\n[ ! -r "$CODEX_HOME/env" ] || . "$CODEX_HOME/env"\nexec '; quote_sh "$NATIVE_BIN"; printf ' "$@"\n'; } > "$CODEX_BIN.new"`,
+          'chmod 700 "$CODEX_BIN.new"',
+          'mv -f "$CODEX_BIN.new" "$CODEX_BIN"',
+        ]
+      : []),
     String.raw`for rc in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.zshenv" "$HOME/.zshrc" "$HOME/.zprofile"; do if [ "$rc" = "$HOME/.bash_profile" ] && [ ! -f "$rc" ]; then continue; fi; if [ -f "$rc" ]; then cp -p "$rc" "$BACKUP_DIR/$(basename "$rc")"; else : > "$rc"; fi; tmp="$(mktemp)"; awk -v env_path="$CODEX_HOME_PATH/env" '!/^# OpenCodex environment$/ && !/^# End OpenCodex environment$/ && !( /^[[:space:]]*\[ -f / && (index($0, env_path) || index($0, ".codex/env")) )' "$rc" > "$tmp"; { printf '\n# OpenCodex environment\n[ -f '; quote_sh "$CODEX_HOME_PATH/env"; printf ' ] && . '; quote_sh "$CODEX_HOME_PATH/env"; printf '\n# End OpenCodex environment\n'; } >> "$tmp"; cat "$tmp" > "$rc"; rm -f "$tmp"; done`,
     '. "$CODEX_HOME_PATH/env"',
-    ...(isMacos ? [
-      'printf "%s\\n" "$CODEX_API_KEY" | "$CODEX_BIN" login --with-api-key >/dev/null',
-      'chmod 600 "$CODEX_HOME_PATH/auth.json"',
-      'if command -v launchctl >/dev/null 2>&1; then launchctl setenv CODEX_API_KEY "$CODEX_API_KEY"; fi',
-      '"$CODEX_BIN" app-server daemon restart >/dev/null',
-    ] : []),
+    ...(isMacos
+      ? [
+          'printf "%s\\n" "$CODEX_API_KEY" | "$CODEX_BIN" login --with-api-key >/dev/null',
+          'chmod 600 "$CODEX_HOME_PATH/auth.json"',
+          'if command -v launchctl >/dev/null 2>&1; then launchctl setenv CODEX_API_KEY "$CODEX_API_KEY"; fi',
+          '"$CODEX_BIN" app-server daemon restart >/dev/null',
+        ]
+      : []),
     'printf "配置已写入；原配置备份: %s\\n" "$BACKUP_DIR"',
     'cd "$WORK_DIR"',
     'if [ "${OPENCODEX_INSTALL_NO_LAUNCH:-0}" != 1 ]; then "$CODEX_BIN"' +
@@ -114,5 +130,8 @@ export function buildUnixNativeInstallCommand({
         : '') +
       '; fi',
   ].join('; ');
-  return `bash -c ${shellQuote(script)}`;
+  const command = `bash -c ${shellQuote(script)}`;
+  return isMacos
+    ? command
+    : `${command} && . "${'$'}{CODEX_HOME:-$HOME/.codex}/env" && { hash -r 2>/dev/null || true; }`;
 }
