@@ -48,7 +48,9 @@ func usesKrillCodexHistoryCompatibility(info *relaycommon.RelayInfo) bool {
 		return false
 	}
 	host := strings.ToLower(u.Hostname())
-	return (host == "api.krill-ai.net" || host == "krill-ai.net") && strings.TrimRight(u.Path, "/") == "/codex"
+	// The provider moved its Codex endpoint without changing the history ID
+	// validator. Retain the exact legacy hosts for existing channel configs.
+	return (host == "api.krill-ai.net" || host == "krill-ai.net" || host == "api.kbsfdxc.net") && strings.TrimRight(u.Path, "/") == "/codex"
 }
 
 func normalizeKrillCustomToolHistory(raw []byte) ([]byte, error) {
