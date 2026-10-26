@@ -94,7 +94,15 @@ func ImageJobLookup(c *gin.Context) {
 	var name, size string
 	_ = common.Unmarshal(payload["model"], &name)
 	_ = common.Unmarshal(payload["image_size"], &size)
-	if strings.Contains(strings.ToLower(name), "4k") || strings.EqualFold(size, "4K") {
+	var quality string
+	_ = common.Unmarshal(payload["quality"], &quality)
+	var config struct {
+		ImageConfig struct {
+			ImageSize string `json:"imageSize"`
+		} `json:"imageConfig"`
+	}
+	_ = common.Unmarshal(payload["generationConfig"], &config)
+	if strings.Contains(strings.ToLower(name), "4k") || strings.EqualFold(size, "4K") || strings.EqualFold(config.ImageConfig.ImageSize, "4K") || strings.EqualFold(quality, "high") || strings.EqualFold(quality, "hd") || strings.EqualFold(quality, "ultra") {
 		input.Family = "4k"
 	}
 	existing, lookupErr := model.FindImageJobByKey(c.GetInt("id"), input.KeyHash)
@@ -124,6 +132,12 @@ func ImageGeneration(c *gin.Context) {
 		return
 	}
 	input := value.(*imageJobInput)
+	if service.IsFlowImageJobChannel(c.GetInt("channel_id")) {
+		if _, err := service.BuildFlowImageJobRequest(c, c.GetString("original_model")); err != nil {
+			imageJobError(c, 400, "unsupported_flow_image_request")
+			return
+		}
+	}
 	request, err := helper.GetAndValidateRequest(c, types.RelayFormatOpenAIImage)
 	if err != nil {
 		imageJobError(c, 400, "invalid_image_job_request")

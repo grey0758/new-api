@@ -46,8 +46,15 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	adaptor.Init(info)
 
 	var requestBody io.Reader
+	flowJob := service.IsImageJob(c) && service.IsFlowImageJobChannel(info.ChannelId)
 
-	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
+	if flowJob {
+		body, err := service.BuildFlowImageJobRequest(c, request.Model)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithStatusCode(400), types.ErrOptionWithSkipRetry())
+		}
+		requestBody = bytes.NewReader(body)
+	} else if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
@@ -89,7 +96,12 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	if err := service.BeforeImageJobSubmit(c); err != nil {
 		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 	}
+	originalPath := info.RequestURLPath
+	if flowJob {
+		info.RequestURLPath = "/v1/chat/completions"
+	}
 	resp, err := adaptor.DoRequest(c, info, requestBody)
+	info.RequestURLPath = originalPath
 	if err != nil {
 		options := []types.NewAPIErrorOptions(nil)
 		if service.GeneratedAssetsEnabled() || service.IsImageJob(c) {
@@ -124,6 +136,21 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		}
 	}
 
+	if flowJob && httpResp != nil {
+		body, readErr := io.ReadAll(io.LimitReader(httpResp.Body, service.ImageJobMaxResultBytes+1))
+		_ = httpResp.Body.Close()
+		if readErr != nil || len(body) > service.ImageJobMaxResultBytes {
+			return types.NewError(fmt.Errorf("Flow result read failed"), types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
+		}
+		converted, convertErr := service.ConvertFlowImageJobResponse(body)
+		if convertErr != nil {
+			return types.NewError(convertErr, types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
+		}
+		httpResp.Body = io.NopCloser(bytes.NewReader(converted))
+		httpResp.ContentLength = int64(len(converted))
+		httpResp.Header.Set("Content-Type", "application/json")
+		httpResp.Header.Set("Content-Length", fmt.Sprint(len(converted)))
+	}
 	originalWriter := c.Writer
 	var captureWriter *imageResponseCaptureWriter
 	if service.GeneratedAssetsEnabled() || service.IsImageJob(c) {

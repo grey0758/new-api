@@ -43,3 +43,17 @@ func ImageJobReadAuth() gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+// Only the idempotent lookup may read a completed job with exhausted quota.
+// New submissions still pass the ordinary TokenAuth and rate/model admission.
+func ImageJobSubmissionAuth() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		for _, pref := range strings.Split(c.GetHeader("Prefer"), ",") {
+			if strings.EqualFold(strings.TrimSpace(strings.SplitN(pref, ";", 2)[0]), "respond-async") {
+				ImageJobReadAuth()(c)
+				return
+			}
+		}
+		c.Next()
+	}
+}

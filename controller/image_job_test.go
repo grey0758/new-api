@@ -27,6 +27,7 @@ import (
 func imageJobFixture(t *testing.T, upstream http.Handler) (*gin.Engine, *model.User, *model.Token) {
 	t.Helper()
 	t.Setenv("IMAGE_JOBS_ENABLED", "true")
+	t.Setenv("IMAGE_JOBS_FLOW_CHANNEL_ID", "0")
 	t.Setenv("OPENCODEX_GENERATED_ASSETS_ENABLED", "false")
 	gin.SetMode(gin.TestMode)
 	oldDB, oldLog := model.DB, model.LOG_DB
@@ -59,7 +60,7 @@ func imageJobFixture(t *testing.T, upstream http.Handler) (*gin.Engine, *model.U
 	service.InitHttpClient()
 	router := gin.New()
 	router.Use(middleware.BodyStorageCleanup(), middleware.RequestId())
-	router.POST("/v1/images/generations", middleware.TokenAuth(), ImageJobLookup, func(c *gin.Context) {
+	router.POST("/v1/images/generations", middleware.ImageJobSubmissionAuth(), ImageJobLookup, middleware.TokenAuth(), func(c *gin.Context) {
 		common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
 		require.Nil(t, middleware.SetupContextForSelectedChannel(c, channel, "fixture-4k"))
 		c.Next()
@@ -156,6 +157,7 @@ func TestImageJobAsyncRealRelayBillingDisconnectAndReplay(t *testing.T) {
 	// Polls work with exhausted quota, but revoked or wrong-user tokens cannot read.
 	require.NoError(t, model.DB.Model(&model.Token{}).Where("id = ?", token.Id).Updates(map[string]any{"status": common.TokenStatusExhausted, "remain_quota": 0}).Error)
 	require.Equal(t, 200, jobRequest(router, token, "GET", "/v1/images/jobs/"+receipt.ID, "", "", false).Code)
+	require.Equal(t, 202, jobRequest(router, token, "POST", "/v1/images/generations", body, "unique", true).Code)
 	require.NoError(t, model.DB.Model(&model.Token{}).Where("id = ?", token.Id).Update("status", common.TokenStatusDisabled).Error)
 	require.Equal(t, 401, jobRequest(router, token, "GET", "/v1/images/jobs/"+receipt.ID, "", "", false).Code)
 }
@@ -276,4 +278,41 @@ func TestImageJobRevokedAuthorizationFailsBeforeProvider(t *testing.T) {
 	var after model.User
 	require.NoError(t, model.DB.First(&after, user.Id).Error)
 	require.Equal(t, 1000000, after.Quota)
+}
+
+func TestImageJobFlowProtocolCarriesReferencesAnd4K(t *testing.T) {
+	var calls atomic.Int32
+	router, user, token := imageJobFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		require.Equal(t, "/v1/chat/completions", r.URL.Path)
+		body, _ := io.ReadAll(r.Body)
+		var fields map[string]any
+		require.NoError(t, common.Unmarshal(body, &fields))
+		require.Equal(t, false, fields["stream"])
+		require.Equal(t, "4K", fields["image_size"])
+		require.Equal(t, "1:1", fields["size"])
+		require.Equal(t, float64(0), fields["seed"])
+		require.NotContains(t, fields, "image_urls")
+		messages := fields["messages"].([]any)
+		content := messages[0].(map[string]any)["content"].([]any)
+		require.Equal(t, "fixture prompt", content[0].(map[string]any)["text"])
+		require.Equal(t, "https://fixture.invalid/first", content[1].(map[string]any)["image_url"].(map[string]any)["url"])
+		require.Equal(t, "https://fixture.invalid/second", content[2].(map[string]any)["image_url"].(map[string]any)["url"])
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"created":123,"choices":[{"message":{"content":"![Generated Image](https://fixture.invalid/result4k.png)"}}]}`)
+	}))
+	t.Setenv("IMAGE_JOBS_FLOW_CHANNEL_ID", "90001")
+	body := `{"model":"fixture-4k","prompt":"fixture prompt","n":1,"size":"1:1","image_size":"4K","seed":0,"image_urls":["https://fixture.invalid/first","https://fixture.invalid/second"]}`
+	w := jobRequest(router, token, "POST", "/v1/images/generations", body, "unique", true)
+	require.Equal(t, 202, w.Code, w.Body.String())
+	job, err := model.ClaimImageJob("owner", "4k", time.Now().Unix())
+	require.NoError(t, err)
+	executeImageJob(router, job)
+	current, err := model.FindImageJob(user.Id, job.ID)
+	require.NoError(t, err)
+	require.Equal(t, "completed", current.Status)
+	require.Equal(t, int32(1), calls.Load())
+	require.Contains(t, string(current.ResultBody), "result4k.png")
+	bad := strings.Replace(body, `"n":1`, `"n":2`, 1)
+	require.Equal(t, 400, jobRequest(router, token, "POST", "/v1/images/generations", bad, "other", true).Code)
 }

@@ -76,7 +76,9 @@ func SetRelayRouter(router *gin.Engine) {
 	relayV1Router.Use(middleware.SystemPerformanceCheck())
 	relayV1Router.Use(middleware.TokenAuth())
 	relayV1Router.Use(middleware.ModelRequestRateLimit())
-	relayV1Router.POST("/images/generations", controller.ImageJobLookup, middleware.Distribute(), controller.ImageGeneration)
+	imageSubmit := router.Group("/v1/images")
+	imageSubmit.Use(middleware.RouteTag("relay"), middleware.SystemPerformanceCheck())
+	imageSubmit.POST("/generations", middleware.ImageJobSubmissionAuth(), controller.ImageJobLookup, middleware.TokenAuth(), middleware.ModelRequestRateLimit(), middleware.Distribute(), controller.ImageGeneration)
 	{
 		generatedImageTaskRouter := relayV1Router.Group("/images/tasks")
 		generatedImageTaskRouter.GET("", controller.ListGeneratedImageTasks)
