@@ -37,6 +37,66 @@ func TestRelaySkipRetryErrorReturnsDirectly(t *testing.T) {
 	require.False(t, shouldRetry(c, err, 1, 7))
 }
 
+func TestRelaySelectionFailureDoesNotReplaceLastUpstreamError(t *testing.T) {
+	upstream := types.WithOpenAIError(types.OpenAIError{
+		Message: "safe upstream rejection",
+		Type:    "server_error",
+		Code:    "google_risk_control_rejected",
+	}, http.StatusServiceUnavailable)
+	selection := types.NewErrorWithStatusCode(
+		errors.New("no channel remains"),
+		types.ErrorCodeGetChannelFailed,
+		http.StatusInternalServerError,
+	)
+
+	require.Same(t, upstream, preferUpstreamErrorOverSelectionFailure(upstream, selection))
+	require.Same(t, selection, preferUpstreamErrorOverSelectionFailure(nil, selection))
+}
+
+func TestNormalizeFlowImagePublicErrors(t *testing.T) {
+	tests := []struct {
+		code       types.ErrorCode
+		statusCode int
+	}{
+		{types.ErrorCode("content_policy_violation"), http.StatusUnprocessableEntity},
+		{types.ErrorCode("captcha_unavailable"), http.StatusServiceUnavailable},
+		{types.ErrorCode("google_risk_control_rejected"), http.StatusServiceUnavailable},
+		{types.ErrorCode("image_upsample_failed"), http.StatusBadGateway},
+		{types.ErrorCode("flow_account_pool_unavailable"), http.StatusServiceUnavailable},
+		{types.ErrorCode("invalid_reference_image"), http.StatusUnprocessableEntity},
+		{types.ErrorCode("reference_upload_failed"), http.StatusBadGateway},
+		{types.ErrorCode("flow_model_temporarily_unavailable"), http.StatusServiceUnavailable},
+	}
+
+	for _, tc := range tests {
+		t.Run(string(tc.code), func(t *testing.T) {
+			original := types.WithOpenAIError(types.OpenAIError{
+				Message: "private provider detail",
+				Type:    "upstream_error",
+				Code:    string(tc.code),
+			}, http.StatusInternalServerError)
+
+			normalized := normalizeFlowImagePublicError(original)
+
+			require.Equal(t, tc.statusCode, normalized.StatusCode)
+			require.Equal(t, tc.code, normalized.GetErrorCode())
+			require.True(t, types.IsSkipRetryError(normalized))
+			require.True(t, types.ShouldPreserveUserError(normalized))
+			require.NotContains(t, normalized.Error(), "private provider")
+		})
+	}
+}
+
+func TestNormalizeFlowImagePublicErrorDoesNotBroadenAllowlist(t *testing.T) {
+	original := types.WithOpenAIError(types.OpenAIError{
+		Message: "unknown upstream detail",
+		Type:    "upstream_error",
+		Code:    "unknown_flow_error",
+	}, http.StatusInternalServerError)
+
+	require.Same(t, original, normalizeFlowImagePublicError(original))
+}
+
 func TestPreserveChannelClientValidationErrorOptIn(t *testing.T) {
 	info := &relaycommon.RelayInfo{
 		ChannelMeta: &relaycommon.ChannelMeta{

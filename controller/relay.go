@@ -287,6 +287,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
+	var lastUpstreamError *types.NewAPIError
 
 	for cycle := 0; cycle < maxRelayChannelSelectionCycles(c, relayInfo); cycle++ {
 		if cycle > 0 {
@@ -298,7 +299,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			channel, channelErr := getChannel(c, relayInfo, retryParam)
 			if channelErr != nil {
 				logger.LogError(c, channelErr.Error())
-				newAPIError = channelErr
+				newAPIError = preferUpstreamErrorOverSelectionFailure(lastUpstreamError, channelErr)
 				break
 			}
 
@@ -342,7 +343,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = service.NormalizeResponsesHistoryIDError(newAPIError)
 			newAPIError = service.NormalizeViolationFeeError(newAPIError)
 			newAPIError = preserveChannelClientValidationError(relayInfo, newAPIError)
+			newAPIError = normalizeFlowImagePublicError(newAPIError)
 			relayInfo.LastError = newAPIError
+			lastUpstreamError = newAPIError
 			if relayInfo.IsOuterToolsStream() && c.Request.Context().Err() != nil {
 				// Caller cancellation is not provider failure. Preserve the normal
 				// error/refund cleanup without cooldown or another upstream turn.
@@ -373,6 +376,90 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		retryLogStr := fmt.Sprintf("重试：%s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
 		logger.LogInfo(c, retryLogStr)
 	}
+}
+
+// preferUpstreamErrorOverSelectionFailure prevents a later exhausted channel
+// lookup from replacing the real error returned by an upstream attempt.  The
+// selection failure is operationally useful in logs, but it is not the cause
+// the client should receive for that request.
+func preferUpstreamErrorOverSelectionFailure(upstreamErr, selectionErr *types.NewAPIError) *types.NewAPIError {
+	if upstreamErr != nil {
+		return upstreamErr
+	}
+	return selectionErr
+}
+
+type flowImagePublicErrorContract struct {
+	statusCode int
+	errorType  string
+	message    string
+}
+
+var flowImagePublicErrorContracts = map[types.ErrorCode]flowImagePublicErrorContract{
+	types.ErrorCode("content_policy_violation"): {
+		statusCode: http.StatusUnprocessableEntity,
+		errorType:  "invalid_request_error",
+		message:    "Image request rejected by the provider content policy.",
+	},
+	types.ErrorCode("captcha_unavailable"): {
+		statusCode: http.StatusServiceUnavailable,
+		errorType:  "server_error",
+		message:    "CAPTCHA verification is temporarily unavailable. Please try again later.",
+	},
+	types.ErrorCode("google_risk_control_rejected"): {
+		statusCode: http.StatusServiceUnavailable,
+		errorType:  "server_error",
+		message:    "Google risk control rejected this image attempt. Please try again later.",
+	},
+	types.ErrorCode("image_upsample_failed"): {
+		statusCode: http.StatusBadGateway,
+		errorType:  "server_error",
+		message:    "The requested image upsample could not be completed and verified.",
+	},
+	types.ErrorCode("flow_account_pool_unavailable"): {
+		statusCode: http.StatusServiceUnavailable,
+		errorType:  "server_error",
+		message:    "No eligible Flow account is currently available for this model.",
+	},
+	types.ErrorCode("invalid_reference_image"): {
+		statusCode: http.StatusUnprocessableEntity,
+		errorType:  "invalid_request_error",
+		message:    "A reference image cannot be decoded or has invalid dimensions.",
+	},
+	types.ErrorCode("reference_upload_failed"): {
+		statusCode: http.StatusBadGateway,
+		errorType:  "server_error",
+		message:    "The reference image could not be uploaded to Flow.",
+	},
+	types.ErrorCode("flow_model_temporarily_unavailable"): {
+		statusCode: http.StatusServiceUnavailable,
+		errorType:  "server_error",
+		message:    "The requested Flow image model is temporarily unavailable.",
+	},
+}
+
+// normalizeFlowImagePublicError is a narrow, code-based allowlist.  It keeps
+// private Google text out of the response while preserving a truthful stable
+// cause and prevents NewAPI's outer channel retry from replaying a request
+// that Flow2API has already classified and bounded internally.
+func normalizeFlowImagePublicError(err *types.NewAPIError) *types.NewAPIError {
+	if err == nil {
+		return nil
+	}
+	contract, ok := flowImagePublicErrorContracts[err.GetErrorCode()]
+	if !ok {
+		return err
+	}
+	return types.WithOpenAIError(
+		types.OpenAIError{
+			Message: contract.message,
+			Type:    contract.errorType,
+			Code:    string(err.GetErrorCode()),
+		},
+		contract.statusCode,
+		types.ErrOptionWithSkipRetry(),
+		types.ErrOptionWithPreserveUserError(),
+	)
 }
 
 // preserveChannelClientValidationError turns a provider-recognized request
