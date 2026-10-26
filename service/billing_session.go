@@ -99,18 +99,37 @@ func (s *BillingSession) Refund(c *gin.Context) {
 	tokenConsumed := s.tokenConsumed
 	funding := s.funding
 
-	gopool.Go(func() {
+	isImageJob := IsImageJob(c)
+	refund := func() {
+		if isImageJob && CheckpointImageJobBilling(c, "refunding") != nil {
+			return
+		}
+		refundOK := true
 		// 1) 退还资金来源
 		if err := funding.Refund(); err != nil {
+			refundOK = false
 			common.SysLog("error refunding billing source: " + err.Error())
 		}
 		// 2) 退还令牌额度
 		if tokenConsumed > 0 && !isPlayground {
 			if err := model.IncreaseTokenQuota(tokenId, tokenKey, tokenConsumed); err != nil {
+				refundOK = false
 				common.SysLog("error refunding token quota: " + err.Error())
 			}
 		}
-	})
+		state := "refunded"
+		if !refundOK {
+			state = "reconciliation_required"
+		}
+		if isImageJob {
+			_ = CheckpointImageJobBilling(c, state)
+		}
+	}
+	if isImageJob {
+		refund()
+	} else {
+		gopool.Go(refund)
+	}
 }
 
 // NeedsRefund 返回是否存在需要退还的预扣状态。

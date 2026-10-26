@@ -86,10 +86,13 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 
 	statusCodeMappingStr := c.GetString("status_code_mapping")
 
+	if err := service.BeforeImageJobSubmit(c); err != nil {
+		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+	}
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
 		options := []types.NewAPIErrorOptions(nil)
-		if service.GeneratedAssetsEnabled() {
+		if service.GeneratedAssetsEnabled() || service.IsImageJob(c) {
 			options = append(options, types.ErrOptionWithSkipRetry())
 		}
 		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError, options...)
@@ -99,6 +102,9 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		httpResp = resp.(*http.Response)
 		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		if httpResp.StatusCode != http.StatusOK {
+			if execution := service.ImageJobExecutionFrom(c.Request.Context()); execution != nil {
+				execution.ProviderRejected = true
+			}
 			if httpResp.StatusCode == http.StatusCreated && info.ApiType == constant.APITypeReplicate {
 				// replicate channel returns 201 Created when using Prefer: wait, treat it as success.
 				httpResp.StatusCode = http.StatusOK
@@ -110,7 +116,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 				}
 				// reset status code 重置状态码
 				service.ResetStatusCode(newAPIError, statusCodeMappingStr)
-				if service.GeneratedAssetsEnabled() {
+				if service.GeneratedAssetsEnabled() || service.IsImageJob(c) {
 					newAPIError = types.NewError(newAPIError, newAPIError.GetErrorCode(), types.ErrOptionWithSkipRetry())
 				}
 				return newAPIError
@@ -120,8 +126,11 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 
 	originalWriter := c.Writer
 	var captureWriter *imageResponseCaptureWriter
-	if service.GeneratedAssetsEnabled() {
+	if service.GeneratedAssetsEnabled() || service.IsImageJob(c) {
 		captureWriter = newImageResponseCaptureWriter(originalWriter)
+		if service.IsImageJob(c) {
+			captureWriter.maxBytes = service.ImageJobMaxResultBytes
+		}
 		c.Writer = captureWriter
 	}
 
@@ -165,7 +174,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 				types.ErrOptionWithSkipRetry(),
 			)
 		}
-		if err := service.PersistGeneratedImageResponse(c, info, request, &imageResponse); err != nil {
+		if err := persistImageResponseIfEnabled(c, info, request, &imageResponse); err != nil {
 			clearCapturedImageResponseHeaders(originalWriter)
 			return types.NewErrorWithStatusCode(
 				err,
@@ -175,9 +184,15 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 			)
 		}
 		responseBody, err := common.Marshal(imageResponse)
+		if !service.GeneratedAssetsEnabled() || service.IsImageJob(c) {
+			responseBody, err = captureWriter.body.Bytes(), nil
+		}
 		if err != nil {
 			clearCapturedImageResponseHeaders(originalWriter)
 			return types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		}
+		if err := service.PersistImageJobResult(c, responseBody); err != nil {
+			return types.NewError(err, types.ErrorCode("image_job_result_checkpoint_failed"), types.ErrOptionWithSkipRetry())
 		}
 		if err := writeCapturedImageResponse(originalWriter, captureWriter.Status(), responseBody); err != nil {
 			logger.LogError(c, "generated image was persisted but the response could not be delivered: "+err.Error())
@@ -223,4 +238,11 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 
 	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), logContent)
 	return nil
+}
+
+func persistImageResponseIfEnabled(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ImageRequest, response *dto.ImageResponse) error {
+	if !service.GeneratedAssetsEnabled() || service.IsImageJob(c) {
+		return nil
+	}
+	return service.PersistGeneratedImageResponse(c, info, request, response)
 }

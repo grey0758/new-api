@@ -118,6 +118,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			logger.LogError(c, fmt.Sprintf("relay error: %s", newAPIError.Error()))
 			service.RecordFinalChannelHealthError(c, newAPIError)
 			newAPIError = sanitizeRelayErrorForUser(c, newAPIError)
+			if execution := service.ImageJobExecutionFrom(c.Request.Context()); execution != nil {
+				execution.FinalCode = string(newAPIError.GetErrorCode())
+			}
 			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
 			switch relayFormat {
 			case types.RelayFormatOpenAIRealtime:
@@ -157,7 +160,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	imageRequestTracked := false
-	if relayFormat == types.RelayFormatOpenAIImage && service.GeneratedAssetsEnabled() {
+	if relayFormat == types.RelayFormatOpenAIImage && service.GeneratedAssetsEnabled() && !service.IsImageJob(c) {
 		imageRequest, ok := request.(*dto.ImageRequest)
 		if !ok {
 			newAPIError = types.NewError(
@@ -261,6 +264,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	if priceData.FreeModel {
 		logger.LogInfo(c, fmt.Sprintf("模型 %s 免费，跳过预扣费", relayInfo.OriginModelName))
 	} else {
+		if service.IsImageJob(c) {
+			relayInfo.ForcePreConsume = true
+			if checkpointErr := service.CheckpointImageJobBilling(c, "reserving"); checkpointErr != nil {
+				newAPIError = types.NewError(checkpointErr, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+				return
+			}
+		}
 		newAPIError = service.PreConsumeBilling(c, priceData.QuotaToPreConsume, relayInfo)
 		if newAPIError != nil {
 			return
@@ -271,12 +281,24 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		// Only return quota if downstream failed and quota was actually pre-consumed
 		if newAPIError != nil {
 			newAPIError = service.NormalizeViolationFeeError(newAPIError)
-			if relayInfo.Billing != nil {
+			execution := service.ImageJobExecutionFrom(c.Request.Context())
+			if relayInfo.Billing != nil && (execution == nil || !execution.ResultObserved) {
 				relayInfo.Billing.Refund(c)
 			}
 			service.ChargeViolationFeeIfNeeded(c, relayInfo, newAPIError)
 		}
 	}()
+
+	if service.IsImageJob(c) {
+		state := "reserved"
+		if priceData.FreeModel {
+			state = "settled"
+		}
+		if checkpointErr := service.CheckpointImageJobBilling(c, state); checkpointErr != nil {
+			newAPIError = types.NewError(checkpointErr, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+			return
+		}
+	}
 
 	retryParam := &service.RetryParam{
 		Ctx:                c,
@@ -344,6 +366,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = service.NormalizeViolationFeeError(newAPIError)
 			newAPIError = preserveChannelClientValidationError(relayInfo, newAPIError)
 			newAPIError = normalizeFlowImagePublicError(newAPIError)
+			if service.IsImageJob(c) {
+				newAPIError = types.NewError(newAPIError, newAPIError.GetErrorCode(), types.ErrOptionWithSkipRetry())
+			}
 			relayInfo.LastError = newAPIError
 			lastUpstreamError = newAPIError
 			if relayInfo.IsOuterToolsStream() && c.Request.Context().Err() != nil {
@@ -509,6 +534,9 @@ func unsupportedChannelEndpointError() *types.NewAPIError {
 }
 
 func maxRelayChannelSelectionCycles(c *gin.Context, info *relaycommon.RelayInfo) int {
+	if service.IsImageJob(c) {
+		return 1
+	}
 	if c == nil || info == nil || info.ChannelMeta == nil {
 		return 1
 	}
@@ -636,6 +664,9 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 }
 
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int, channelId int) bool {
+	if service.IsImageJob(c) {
+		return false
+	}
 	if openaiErr == nil {
 		return false
 	}

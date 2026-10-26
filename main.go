@@ -192,6 +192,9 @@ func main() {
 
 	// 设置路由
 	router.SetRouter(server, buildFS, indexPage)
+	if err := controller.StartImageJobExecutor(server); err != nil {
+		common.FatalLog("image job initialization failed: " + err.Error())
+	}
 	var port = os.Getenv("PORT")
 	if port == "" {
 		port = strconv.Itoa(*common.Port)

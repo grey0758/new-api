@@ -7,6 +7,7 @@ import (
 	"runtime/debug"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -21,6 +22,9 @@ var _bp = func() string {
 func RequestId() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		id := common.GetTimeString() + _bp + common.GetRandomString(8)
+		if execution := service.ImageJobExecutionFrom(c.Request.Context()); execution != nil {
+			id = execution.RequestID
+		}
 		c.Set(common.RequestIdKey, id)
 		ctx := context.WithValue(c.Request.Context(), common.RequestIdKey, id)
 		c.Request = c.Request.WithContext(ctx)

@@ -13,6 +13,7 @@ type imageResponseCaptureWriter struct {
 	body        bytes.Buffer
 	statusCode  int
 	wroteHeader bool
+	maxBytes    int
 }
 
 func newImageResponseCaptureWriter(writer gin.ResponseWriter) *imageResponseCaptureWriter {
@@ -38,11 +39,17 @@ func (writer *imageResponseCaptureWriter) WriteHeaderNow() {
 
 func (writer *imageResponseCaptureWriter) Write(data []byte) (int, error) {
 	writer.WriteHeaderNow()
+	if writer.maxBytes > 0 && len(data) > writer.maxBytes-writer.body.Len() {
+		return 0, fmt.Errorf("image response exceeds async storage limit")
+	}
 	return writer.body.Write(data)
 }
 
 func (writer *imageResponseCaptureWriter) WriteString(data string) (int, error) {
 	writer.WriteHeaderNow()
+	if writer.maxBytes > 0 && len(data) > writer.maxBytes-writer.body.Len() {
+		return 0, fmt.Errorf("image response exceeds async storage limit")
+	}
 	return writer.body.WriteString(data)
 }
 

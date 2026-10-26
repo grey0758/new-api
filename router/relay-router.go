@@ -66,11 +66,17 @@ func SetRelayRouter(router *gin.Engine) {
 	{
 		playgroundRouter.POST("/chat/completions", controller.Playground)
 	}
+	imageJobs := router.Group("/v1/images/jobs")
+	imageJobs.Use(middleware.RouteTag("relay"), middleware.ImageJobReadAuth())
+	imageJobs.GET("/:job_id", controller.FetchImageJob)
+	imageJobs.GET("/:job_id/result", controller.FetchImageJob)
+	imageJobs.DELETE("/:job_id", controller.FetchImageJob)
 	relayV1Router := router.Group("/v1")
 	relayV1Router.Use(middleware.RouteTag("relay"))
 	relayV1Router.Use(middleware.SystemPerformanceCheck())
 	relayV1Router.Use(middleware.TokenAuth())
 	relayV1Router.Use(middleware.ModelRequestRateLimit())
+	relayV1Router.POST("/images/generations", controller.ImageJobLookup, middleware.Distribute(), controller.ImageGeneration)
 	{
 		generatedImageTaskRouter := relayV1Router.Group("/images/tasks")
 		generatedImageTaskRouter.GET("", controller.ListGeneratedImageTasks)
@@ -130,9 +136,6 @@ func SetRelayRouter(router *gin.Engine) {
 
 		// image related routes
 		httpRouter.POST("/edits", func(c *gin.Context) {
-			controller.Relay(c, types.RelayFormatOpenAIImage)
-		})
-		httpRouter.POST("/images/generations", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatOpenAIImage)
 		})
 		httpRouter.POST("/images/edits", func(c *gin.Context) {
