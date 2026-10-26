@@ -886,20 +886,20 @@ func TestChannelActiveProbeEligibility(t *testing.T) {
 	require.Empty(t, mode)
 }
 
-func TestResolveCooldownProbeModelAlwaysUsesSol(t *testing.T) {
-	testModel := "gpt-5.5"
+func TestResolveCooldownProbeModelAlwaysUsesLatestSol(t *testing.T) {
+	testModel := "gpt-5.6-sol"
 	modelMapping := `{"gpt-5.5":"legacy-provider-model"}`
 	channel := &model.Channel{
 		TestModel:    &testModel,
-		Models:       "gpt-5.5,gpt-5.6-sol",
+		Models:       "gpt-5.5,gpt-5.6-sol,gpt-6.1-sol",
 		ModelMapping: &modelMapping,
 	}
 
-	for _, failedModel := range []string{"", "gpt-5.5", "gpt-6-astra"} {
-		require.Equal(t, "gpt-5.6-sol", resolveCooldownProbeModel(channel, failedModel))
+	for _, failedModel := range []string{"", "gpt-5.5", "gpt-5.6-sol", "gpt-6-astra"} {
+		require.Equal(t, "gpt-6.1-sol", resolveCooldownProbeModel(channel, failedModel))
 	}
-	modelMapping = `{"gpt-5.6-sol":"upstream-gpt-5.6-sol"}`
-	require.Equal(t, "upstream-gpt-5.6-sol", resolveCooldownProbeModel(channel, "gpt-5.5"))
+	modelMapping = `{"gpt-5.6-sol":"old-provider-model","gpt-6.1-sol":"upstream-gpt-6.1-sol"}`
+	require.Equal(t, "upstream-gpt-6.1-sol", resolveCooldownProbeModel(channel, "gpt-5.5"))
 }
 
 func TestProbeOpenAIResponsesStreamUsesResponsesEndpoint(t *testing.T) {
@@ -911,7 +911,7 @@ func TestProbeOpenAIResponsesStreamUsesResponsesEndpoint(t *testing.T) {
 
 		payload := map[string]interface{}{}
 		require.NoError(t, common.DecodeJson(r.Body, &payload))
-		require.Equal(t, "gpt-5.6-sol", payload["model"])
+		require.Equal(t, "gpt-6.1-sol", payload["model"])
 		require.Equal(t, true, payload["stream"])
 		require.Equal(t, float64(16), payload["max_output_tokens"])
 		require.Contains(t, payload, "input")
@@ -932,7 +932,7 @@ func TestProbeOpenAIResponsesStreamUsesResponsesEndpoint(t *testing.T) {
 		HeaderOverride: &headerOverride,
 	}
 
-	require.NoError(t, probeOpenAIResponsesStream(channel, "gpt-5.6-sol", time.Second))
+	require.NoError(t, probeOpenAIResponsesStream(channel, "gpt-6.1-sol", time.Second))
 }
 
 func TestCooldownProbeChunkHasResponsesContent(t *testing.T) {
