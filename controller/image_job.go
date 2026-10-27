@@ -25,6 +25,10 @@ import (
 
 const imageJobInputKey = "image_job_input"
 
+// Initialized at startup, before serving requests. Tests may restore it while
+// no executor is running; live configuration changes require a drained restart.
+var imageJobCapacity = service.ImageJobCapacity{Limits: model.ImageJobLimits{Pending: 48, PerUser: 8, PendingBytes: 128 << 20, StoredBytes: 1 << 30, Retained: 10000}, StandardWorkers: 4, FourKWorkers: 1}
+
 type imageJobInput struct {
 	Body                  []byte
 	KeyHash, Hash, Family string
@@ -185,13 +189,18 @@ func ImageGeneration(c *gin.Context) {
 	if specific := c.GetString("specific_channel_id"); specific != "" {
 		job.TokenSuffix = specific
 	}
-	limits := model.ImageJobLimits{Pending: 48, PerUser: 8, PendingBytes: 128 << 20, StoredBytes: 1 << 30}
+	limits := imageJobCapacity.Limits
 	job, created, err := model.AdmitImageJob(job, limits)
 	if errors.Is(err, model.ErrImageJobConflict) {
 		imageJobError(c, 409, "idempotency_key_conflict")
 		return
 	}
 	if errors.Is(err, model.ErrImageJobFull) {
+		var capacity *model.ImageJobCapacityError
+		if errors.As(err, &capacity) {
+			c.Header("X-Image-Queue-Limit", capacity.Reason)
+			common.SysLog(fmt.Sprintf("image_job_capacity_rejected: reason=%s current=%d limit=%d family=%s", capacity.Reason, capacity.Current, capacity.Limit, input.Family))
+		}
 		c.Header("Retry-After", "5")
 		imageJobError(c, 429, "image_job_queue_full")
 		return
@@ -281,6 +290,11 @@ func StartImageJobExecutor(handler http.Handler) error {
 	if !service.ImageJobsEnabled() {
 		return nil
 	}
+	capacity, err := service.LoadImageJobCapacity()
+	if err != nil {
+		return err
+	}
+	imageJobCapacity = capacity
 	if err := model.InitImageJobs(); err != nil {
 		return err
 	}
@@ -300,27 +314,47 @@ func StartImageJobExecutor(handler http.Handler) error {
 			wasLeader = leader
 		}
 	}()
-	for _, family := range []string{"standard", "standard", "standard", "standard", "4k"} {
-		go func(family string) {
-			ticker := time.NewTicker(time.Second)
-			defer ticker.Stop()
-			for range ticker.C {
-				if !model.IsBackgroundTaskLeader() {
-					continue
-				}
-				job, err := model.ClaimImageJob(owner, family, time.Now().Unix())
-				if err != nil {
-					if !errors.Is(err, gorm.ErrRecordNotFound) {
-						common.SysError("image_job_claim_failed")
-					}
-					continue
-				}
-				executeImageJob(handler, job)
+	startImageJobWorkers(context.Background(), imageJobCapacity, time.Second, model.IsBackgroundTaskLeader, func(family string) {
+		job, err := model.ClaimImageJob(owner, family, time.Now().Unix())
+		if err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				common.SysError("image_job_claim_failed")
 			}
-		}(family)
-	}
-	common.SysLog("image_jobs_enabled: workers_standard=4 workers_4k=1 pending=48 per_user=8 request_max=8388608 queue_bytes=134217728")
+			return
+		}
+		executeImageJob(handler, job)
+	})
+	common.SysLog(fmt.Sprintf("image_jobs_enabled: workers_standard=%d workers_4k=%d pending=%d per_user=%d request_max=%d queue_bytes=%d result_bytes=%d retained=%d", capacity.StandardWorkers, capacity.FourKWorkers, capacity.Limits.Pending, capacity.Limits.PerUser, service.ImageJobMaxRequestBytes, capacity.Limits.PendingBytes, capacity.Limits.StoredBytes, capacity.Limits.Retained))
 	return nil
+}
+
+// Each synchronous run owns its slot until execution and billing finish. Empty
+// queues poll at a bounded rate and cancellation stops further claims.
+func startImageJobWorkers(ctx context.Context, capacity service.ImageJobCapacity, interval time.Duration, isLeader func() bool, run func(string)) {
+	for _, pool := range []struct {
+		family string
+		count  int
+	}{{"standard", capacity.StandardWorkers}, {"4k", capacity.FourKWorkers}} {
+		for i := 0; i < pool.count; i++ {
+			go func(family string) {
+				ticker := time.NewTicker(interval)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						if ctx.Err() != nil {
+							return
+						}
+						if isLeader() {
+							run(family)
+						}
+					}
+				}
+			}(pool.family)
+		}
+	}
 }
 
 type imageJobResponseWriter struct {

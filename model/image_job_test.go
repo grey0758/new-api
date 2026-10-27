@@ -148,3 +148,36 @@ func TestImageJobRestartExpiryAndCancelNeverReplay(t *testing.T) {
 	require.Empty(t, job.ResultBody)
 	require.Equal(t, "result", job.ResultHash)
 }
+
+func TestImageJobCapacityReasonsAndRetainedOverride(t *testing.T) {
+	for _, tc := range []struct {
+		reason string
+		limits ImageJobLimits
+		user   int
+	}{
+		{"user_pending", ImageJobLimits{Pending: 2, PerUser: 1, PendingBytes: 100, StoredBytes: 100}, 1},
+		{"global_pending", ImageJobLimits{Pending: 1, PerUser: 2, PendingBytes: 100, StoredBytes: 100}, 2},
+		{"request_bytes", ImageJobLimits{Pending: 2, PerUser: 2, PendingBytes: 8, StoredBytes: 100}, 2},
+		{"retained_jobs", ImageJobLimits{Pending: 2, PerUser: 2, PendingBytes: 100, StoredBytes: 100, Retained: 1}, 2},
+	} {
+		t.Run(tc.reason, func(t *testing.T) {
+			imageJobTestDB(t)
+			_, _, err := AdmitImageJob(testImageJob("first", 1), tc.limits)
+			require.NoError(t, err)
+			_, _, err = AdmitImageJob(testImageJob("second", tc.user), tc.limits)
+			require.ErrorIs(t, err, ErrImageJobFull)
+			var capacity *ImageJobCapacityError
+			require.ErrorAs(t, err, &capacity)
+			require.Equal(t, tc.reason, capacity.Reason)
+			_, fresh, err := AdmitImageJob(testImageJob("first", 1), tc.limits)
+			require.NoError(t, err)
+			require.False(t, fresh)
+		})
+	}
+	imageJobTestDB(t)
+	require.NoError(t, DB.Exec("INSERT INTO image_jobs (id,user_id,token_id,key_hash,request_hash,request_id,model,family,status,client_ip,request_bytes,created_at,queue_expires_at,expires_at) VALUES ('retained',1,1,'retained','hash','id','fixture','4k','completed','',0,1,1,9999999999)").Error)
+	limits := ImageJobLimits{Pending: 2, PerUser: 2, PendingBytes: 100, StoredBytes: 100, Retained: 2}
+	_, fresh, err := AdmitImageJob(testImageJob("new", 1), limits)
+	require.NoError(t, err)
+	require.True(t, fresh)
+}

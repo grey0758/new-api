@@ -51,12 +51,22 @@ type ImageJobGate struct {
 }
 
 type ImageJobLimits struct {
-	Pending, PerUser          int64
-	PendingBytes, StoredBytes int64
+	Pending, PerUser, Retained int64
+	PendingBytes, StoredBytes  int64
 }
 
 var ErrImageJobConflict = errors.New("idempotency_key_conflict")
 var ErrImageJobFull = errors.New("image_job_queue_full")
+
+// Capacity errors retain the public error identity and contain counts only.
+type ImageJobCapacityError struct {
+	Reason         string
+	Current, Limit int64
+}
+
+func (e *ImageJobCapacityError) Error() string { return ErrImageJobFull.Error() }
+func (e *ImageJobCapacityError) Unwrap() error { return ErrImageJobFull }
+
 var ErrImageJobLost = errors.New("image_job_owner_lost")
 
 func imageJobDB() *gorm.DB {
@@ -119,11 +129,25 @@ func AdmitImageJob(job *ImageJob, limits ImageJobLimits) (*ImageJob, bool, error
 		if err := tx.Model(&ImageJob{}).Count(&retained).Error; err != nil {
 			return err
 		}
-		if retained >= 10000 {
-			return ErrImageJobFull
+		maxRetained := limits.Retained
+		if maxRetained <= 0 {
+			maxRetained = 10000
 		}
-		if count >= limits.Pending || own >= limits.PerUser || sizes.PendingBytes+job.RequestBytes > limits.PendingBytes || sizes.StoredBytes >= limits.StoredBytes {
-			return ErrImageJobFull
+		for _, bound := range []struct {
+			reason         string
+			current, limit int64
+		}{
+			{"global_pending", count, limits.Pending},
+			{"user_pending", own, limits.PerUser},
+			{"result_bytes", sizes.StoredBytes, limits.StoredBytes},
+			{"retained_jobs", retained, maxRetained},
+		} {
+			if bound.current >= bound.limit {
+				return &ImageJobCapacityError{Reason: bound.reason, Current: bound.current, Limit: bound.limit}
+			}
+		}
+		if sizes.PendingBytes+job.RequestBytes > limits.PendingBytes {
+			return &ImageJobCapacityError{Reason: "request_bytes", Current: sizes.PendingBytes + job.RequestBytes, Limit: limits.PendingBytes}
 		}
 		if err := tx.Create(job).Error; err != nil {
 			return err
