@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/url"
 	"os"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -132,4 +134,16 @@ func ConvertFlowImageJobResponse(body []byte) ([]byte, error) {
 		response.Created = time.Now().Unix()
 	}
 	return common.Marshal(dto.ImageResponse{Created: response.Created, Data: []dto.ImageData{data}})
+}
+
+// FlowImageJobRejectionCode accepts only the complete provider-owned rejection
+// message emitted by Flow's validated Google RPC error slot. Generic HTTP500,
+// partial responses, request text and other provider reasons remain unclassified.
+func FlowImageJobRejectionCode(err *types.NewAPIError) string {
+	if err != nil && err.StatusCode == http.StatusInternalServerError &&
+		err.GetErrorCode() == types.ErrorCodeBadResponseStatusCode &&
+		err.Error() == "Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC" {
+		return "flow_provider_high_traffic"
+	}
+	return ""
 }

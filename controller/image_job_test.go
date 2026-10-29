@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
@@ -57,6 +58,11 @@ func imageJobFixture(t *testing.T, upstream http.Handler) (*gin.Engine, *model.U
 	previousPrices := ratio_setting.ModelPrice2JSONString()
 	t.Cleanup(func() { _ = ratio_setting.UpdateModelPriceByJSONString(previousPrices) })
 	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"fixture-4k":0.01}`))
+	// Refund cache updates use the global worker pool. Join them before this
+	// fixture resets process-global Redis/DB state for the next test.
+	t.Cleanup(func() {
+		require.Eventually(t, func() bool { return gopool.WorkerCount() == 0 }, 5*time.Second, time.Millisecond)
+	})
 	service.InitHttpClient()
 	router := gin.New()
 	router.Use(middleware.BodyStorageCleanup(), middleware.RequestId())

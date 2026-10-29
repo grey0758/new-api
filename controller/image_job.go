@@ -422,6 +422,13 @@ func executeImageJob(handler http.Handler, job *model.ImageJob) {
 	} else if current.BillingStatus != "not_started" && current.BillingStatus != "refunded" && current.BillingStatus != "settled" {
 		status, code = "reconciliation_required", "billing_reconciliation_required"
 	}
+	// A positive provider rejection does not imply an async transport fault.
+	// Never downgrade uncertain outcome/billing/checkpoint/result states.
+	if status == "failed" && current.BillingStatus == "refunded" && execution.ProviderRejected &&
+		!execution.CheckpointFailed && current.ResultHash == "" && current.ResultBytes == 0 &&
+		execution.ProviderRejectionCode == "flow_provider_high_traffic" {
+		code = execution.ProviderRejectionCode
+	}
 	if err := model.UpdateOwnedImageJob(job.ID, job.Owner, map[string]any{"status": status, "error_code": code, "http_status": w.status, "finished_at": time.Now().Unix(), "request_body": nil, "request_bytes": 0}); err != nil {
 		common.SysError(fmt.Sprintf("image_job_finish_failed: %s", job.ID))
 	}

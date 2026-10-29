@@ -22,11 +22,12 @@ const ImageJobMaxResultBytes = 48 << 20
 
 type imageJobContextKey struct{}
 type ImageJobExecution struct {
-	ID, Owner, RequestID string
-	ResultObserved       bool
-	CheckpointFailed     bool
-	FinalCode            string
-	ProviderRejected     bool
+	ID, Owner, RequestID  string
+	ResultObserved        bool
+	CheckpointFailed      bool
+	FinalCode             string
+	ProviderRejected      bool
+	ProviderRejectionCode string
 }
 
 func WithImageJob(ctx context.Context, execution *ImageJobExecution) context.Context {

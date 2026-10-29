@@ -126,6 +126,13 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 				} else {
 					newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 				}
+				// Preserve the provider reason before user-visible sanitization.
+				// Only the explicitly configured asynchronous Flow adapter sets it.
+				if flowJob {
+					if execution := service.ImageJobExecutionFrom(c.Request.Context()); execution != nil {
+						execution.ProviderRejectionCode = service.FlowImageJobRejectionCode(newAPIError)
+					}
+				}
 				// reset status code 重置状态码
 				service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 				if service.GeneratedAssetsEnabled() || service.IsImageJob(c) {
