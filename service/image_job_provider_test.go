@@ -16,6 +16,13 @@ func TestFlowImageJobProviderBusyRequiresExactAuthoritativeRejection(t *testing.
 	}{
 		{"Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC", 500, types.ErrorCodeBadResponseStatusCode, "flow_provider_high_traffic"},
 		{"Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC", 500, types.ErrorCode("generation_failed"), "flow_provider_high_traffic"},
+		{"生成失败: Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC", 500, types.ErrorCodeBadResponseStatusCode, "flow_provider_high_traffic"},
+		{"生成失败: Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC", 500, types.ErrorCode("generation_failed"), "flow_provider_high_traffic"},
+		{"生成失败: Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC", 503, types.ErrorCodeBadResponseStatusCode, ""},
+		{"生成失败: Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC", 500, types.ErrorCodeDoRequestFailed, ""},
+		{"生成失败: Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC trailing", 500, types.ErrorCodeBadResponseStatusCode, ""},
+		{"生成失败: Google RPC rejection: PUBLIC_ERROR_UNUSUAL_ACTIVITY", 500, types.ErrorCode("generation_failed"), ""},
+		{"生成失败: 生成失败: Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC", 500, types.ErrorCode("generation_failed"), ""},
 		{"Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC", 503, types.ErrorCodeBadResponseStatusCode, ""},
 		{"Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC", 500, types.ErrorCodeDoRequestFailed, ""},
 		{"Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC trailing", 500, types.ErrorCodeBadResponseStatusCode, ""},

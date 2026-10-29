@@ -21,10 +21,13 @@ func TestImageJobProviderBusyPersistsOnlyForRefundedExplicitFlowRejection(t *tes
 		status             int
 	}{
 		{"exact_flow_busy", "Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC", "flow_provider_high_traffic", true, 500},
+		{"wrapped_flow_busy", "生成失败: Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC", "flow_provider_high_traffic", true, 500},
 		{"generic_500", "upstream server unavailable", "bad_response_status_code", true, 500},
 		{"mixed_reason", "Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC trailing", "bad_response_status_code", true, 500},
 		{"other_provider", "Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC", "bad_response_status_code", false, 500},
 		{"different_status", "Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC", "bad_response_status_code", true, 503},
+		{"wrapped_other_provider", "生成失败: Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC", "bad_response_status_code", false, 500},
+		{"wrapped_other_reason", "生成失败: Google RPC rejection: PUBLIC_ERROR_UNUSUAL_ACTIVITY", "bad_response_status_code", true, 500},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls atomic.Int32
@@ -101,12 +104,27 @@ func TestImageJobBusyNeverDowngradesUnknownOrBillingEvidence(t *testing.T) {
 }
 
 func TestImageJobProviderBusyFlowOpenAIEnvelope(t *testing.T) {
+	for _, message := range []string{
+		"Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC",
+		"生成失败: Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC",
+	} {
+		t.Run(message, func(t *testing.T) {
+			testImageJobProviderBusyFlowOpenAIEnvelope(t, message)
+		})
+	}
+}
+
+func testImageJobProviderBusyFlowOpenAIEnvelope(t *testing.T, message string) {
 	var calls atomic.Int32
 	router, user, token := imageJobFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(500)
-		_, _ = w.Write([]byte(`{"error":{"message":"Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC","type":"server_error","code":"generation_failed","status_code":500}}`))
+		body, err := common.Marshal(map[string]any{"error": map[string]any{
+			"message": message, "type": "server_error", "code": "generation_failed", "status_code": 500,
+		}})
+		require.NoError(t, err)
+		_, _ = w.Write(body)
 	}))
 	t.Setenv("IMAGE_JOBS_FLOW_CHANNEL_ID", "90001")
 	w := jobRequest(router, token, "POST", "/v1/images/generations", `{"model":"fixture-4k","prompt":"fixture","n":1}`, "unique", true)

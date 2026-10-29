@@ -137,13 +137,17 @@ func ConvertFlowImageJobResponse(body []byte) ([]byte, error) {
 }
 
 // FlowImageJobRejectionCode accepts only the complete provider-owned rejection
-// message emitted by Flow's validated Google RPC error slot. Generic HTTP500,
+// message emitted by Flow's validated Google RPC error slot, including its
+// generation-handler wrapper. Generic HTTP500,
 // partial responses, request text and other provider reasons remain unclassified.
 func FlowImageJobRejectionCode(err *types.NewAPIError) string {
 	if err != nil && err.StatusCode == http.StatusInternalServerError &&
-		(err.GetErrorCode() == types.ErrorCodeBadResponseStatusCode || err.GetErrorCode() == types.ErrorCode("generation_failed")) &&
-		err.Error() == "Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC" {
-		return "flow_provider_high_traffic"
+		(err.GetErrorCode() == types.ErrorCodeBadResponseStatusCode || err.GetErrorCode() == types.ErrorCode("generation_failed")) {
+		switch err.Error() {
+		case "Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC",
+			"生成失败: Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC":
+			return "flow_provider_high_traffic"
+		}
 	}
 	return ""
 }
