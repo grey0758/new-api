@@ -141,7 +141,7 @@ func ConvertFlowImageJobResponse(body []byte) ([]byte, error) {
 // partial responses, request text and other provider reasons remain unclassified.
 func FlowImageJobRejectionCode(err *types.NewAPIError) string {
 	if err != nil && err.StatusCode == http.StatusInternalServerError &&
-		err.GetErrorCode() == types.ErrorCodeBadResponseStatusCode &&
+		(err.GetErrorCode() == types.ErrorCodeBadResponseStatusCode || err.GetErrorCode() == types.ErrorCode("generation_failed")) &&
 		err.Error() == "Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC" {
 		return "flow_provider_high_traffic"
 	}

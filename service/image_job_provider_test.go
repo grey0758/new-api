@@ -15,6 +15,7 @@ func TestFlowImageJobProviderBusyRequiresExactAuthoritativeRejection(t *testing.
 		want    string
 	}{
 		{"Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC", 500, types.ErrorCodeBadResponseStatusCode, "flow_provider_high_traffic"},
+		{"Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC", 500, types.ErrorCode("generation_failed"), "flow_provider_high_traffic"},
 		{"Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC", 503, types.ErrorCodeBadResponseStatusCode, ""},
 		{"Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC", 500, types.ErrorCodeDoRequestFailed, ""},
 		{"Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC trailing", 500, types.ErrorCodeBadResponseStatusCode, ""},

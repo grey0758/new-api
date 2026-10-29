@@ -99,3 +99,26 @@ func TestImageJobBusyNeverDowngradesUnknownOrBillingEvidence(t *testing.T) {
 		})
 	}
 }
+
+func TestImageJobProviderBusyFlowOpenAIEnvelope(t *testing.T) {
+	var calls atomic.Int32
+	router, user, token := imageJobFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(500)
+		_, _ = w.Write([]byte(`{"error":{"message":"Google RPC rejection: PUBLIC_ERROR_HIGH_TRAFFIC","type":"server_error","code":"generation_failed","status_code":500}}`))
+	}))
+	t.Setenv("IMAGE_JOBS_FLOW_CHANNEL_ID", "90001")
+	w := jobRequest(router, token, "POST", "/v1/images/generations", `{"model":"fixture-4k","prompt":"fixture","n":1}`, "unique", true)
+	require.Equal(t, 202, w.Code)
+	job, err := model.ClaimImageJob("owner", "4k", time.Now().Unix())
+	require.NoError(t, err)
+	executeImageJob(router, job)
+	current, err := model.FindImageJob(user.Id, job.ID)
+	require.NoError(t, err)
+	require.Equal(t, "failed", current.Status)
+	require.Equal(t, "refunded", current.BillingStatus)
+	require.Equal(t, "flow_provider_high_traffic", current.ErrorCode)
+	require.Empty(t, current.ResultHash)
+	require.Equal(t, int32(1), calls.Load())
+}
