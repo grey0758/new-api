@@ -11,9 +11,9 @@ and builder share a host limit of 2 CPU equivalents and 8 GiB RAM. Each runner
 instance processes one job at a time. Local BuildKit cache persists between
 builds; the existing GitHub Actions cache remains enabled.
 
-The Dockerfile bounds the frontend Node heap to4GiB explicitly. Rootless
-containers can see host RAM rather than an ancestor cgroup's limit; an
-unbounded V8 heap otherwise causes sustained reclaim before collection.
+The Dockerfile runs Vite directly with `bun --smol` so Bun collects more
+frequently. The image's `node` executable points to Bun; Node/V8 heap flags
+do not constrain that process. The shared cgroup still enforces8GiB maximum.
 
 The production workflow still requires an exact release tag reachable from
 main, the complete test matrix, Trivy, keyless Cosign signatures, SLSA v1
