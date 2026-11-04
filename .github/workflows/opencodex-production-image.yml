@@ -93,7 +93,7 @@ jobs:
           test ! -r /var/run/docker.sock
           test ! -w /var/run/docker.sock
           docker buildx inspect --bootstrap
-          printf 'Build host: %s; user: %s; shared budget: 2 CPUs / 6 GiB\n' "$(hostname)" "$(id -un)" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Build host: %s; user: %s; shared budget: 2 CPUs / 8 GiB\n' "$(hostname)" "$(id -un)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3

@@ -6,7 +6,9 @@ COPY web/bun.lock .
 RUN bun install --frozen-lockfile
 COPY ./web .
 COPY ./VERSION .
-RUN DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$(cat VERSION) bun run build
+# Rootless builders may see host RAM instead of an ancestor cgroup's limit.
+# Bound V8 explicitly so collection happens before the shared host budget fills.
+RUN NODE_OPTIONS='--max-old-space-size=4096' DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$(cat VERSION) bun run build
 
 FROM golang:1.26.10-alpine@sha256:27f2d3b83cfc5803c8078f8e730af0f7c431bf067afaec8f60a36fb763187cba AS builder2
 ENV GO111MODULE=on CGO_ENABLED=0

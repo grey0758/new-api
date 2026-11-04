@@ -7,9 +7,13 @@ the existing cloud build path.
 
 The self-hosted account has no sudo, production SSH keys, or host Docker socket
 access. Buildx connects to a dedicated rootless BuildKit Unix socket. Runner
-and builder share a host limit of 2 CPU equivalents and 6 GiB RAM. Each runner
+and builder share a host limit of 2 CPU equivalents and 8 GiB RAM. Each runner
 instance processes one job at a time. Local BuildKit cache persists between
 builds; the existing GitHub Actions cache remains enabled.
+
+The Dockerfile bounds the frontend Node heap to4GiB explicitly. Rootless
+containers can see host RAM rather than an ancestor cgroup's limit; an
+unbounded V8 heap otherwise causes sustained reclaim before collection.
 
 The production workflow still requires an exact release tag reachable from
 main, the complete test matrix, Trivy, keyless Cosign signatures, SLSA v1
