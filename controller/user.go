@@ -410,6 +410,10 @@ type TransferAffQuotaRequest struct {
 }
 
 func TransferAffQuota(c *gin.Context) {
+	if !model.IsInvitationEnabled() {
+		common.ApiErrorMsg(c, "本站未开启邀请奖励")
+		return
+	}
 	id := c.GetInt("id")
 	user, err := model.GetUserById(id, true)
 	if err != nil {
@@ -430,6 +434,10 @@ func TransferAffQuota(c *gin.Context) {
 }
 
 func GetAffCode(c *gin.Context) {
+	if !model.IsInvitationEnabled() {
+		common.ApiErrorMsg(c, "本站未开启邀请奖励")
+		return
+	}
 	id := c.GetInt("id")
 	user, err := model.GetUserById(id, true)
 	if err != nil {
@@ -437,15 +445,17 @@ func GetAffCode(c *gin.Context) {
 		return
 	}
 	if user.AffCode == "" {
-		user.AffCode = common.GetRandomString(4)
-		if err := user.Update(false); err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
+		code := common.GetRandomString(8)
+		if err := model.DB.Model(&model.User{}).Where("id = ? AND (aff_code = ? OR aff_code IS NULL)", id, "").Update("aff_code", code).Error; err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if err := model.DB.Select("id", "aff_code").First(user, id).Error; err != nil {
+			common.ApiError(c, err)
 			return
 		}
 	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -461,6 +471,14 @@ func GetSelf(c *gin.Context) {
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	if model.IsInvitationEnabled() {
+		count, err := model.GetInvitationCount(id)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		user.AffCount = int(count)
 	}
 	// Hide admin remarks: set to empty to trigger omitempty tag, ensuring the remark field is not included in JSON returned to regular users
 	user.Remark = ""

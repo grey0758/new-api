@@ -204,34 +204,12 @@ func completeWxDaEpayTopUp(c *gin.Context, verifyInfo *service.WxDaEpayVerifyRes
 	LockOrder(verifyInfo.ServiceTradeNo)
 	defer UnlockOrder(verifyInfo.ServiceTradeNo)
 
-	topUp := model.GetTopUpByTradeNo(verifyInfo.ServiceTradeNo)
-	if topUp == nil {
-		return fmt.Errorf("充值订单不存在")
+	topUp, quotaToAdd, applied, err := model.CompleteBalanceTopUp(verifyInfo.ServiceTradeNo, expectedPaymentMethod)
+	if err != nil {
+		return err
 	}
-	if topUp.PaymentMethod != expectedPaymentMethod {
-		return model.ErrPaymentMethodMismatch
-	}
-	if topUp.Status == common.TopUpStatusSuccess {
+	if !applied {
 		return nil
-	}
-	if topUp.Status != common.TopUpStatusPending {
-		return fmt.Errorf("充值订单状态错误")
-	}
-
-	topUp.Status = common.TopUpStatusSuccess
-	topUp.CompleteTime = common.GetTimestamp()
-	if err := topUp.Update(); err != nil {
-		return err
-	}
-
-	dAmount := decimal.NewFromInt(topUp.Amount)
-	dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
-	quotaToAdd := int(dAmount.Mul(dQuotaPerUnit).IntPart())
-	if quotaToAdd <= 0 {
-		return fmt.Errorf("无效的充值额度")
-	}
-	if err := model.IncreaseUserQuota(topUp.UserId, quotaToAdd, true); err != nil {
-		return err
 	}
 
 	logger.LogInfo(c.Request.Context(), fmt.Sprintf("wxDa 支付 充值成功 trade_no=%s user_id=%d client_ip=%s quota_to_add=%d money=%.2f", topUp.TradeNo, topUp.UserId, c.ClientIP(), quotaToAdd, topUp.Money))

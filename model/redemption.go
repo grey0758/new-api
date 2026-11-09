@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Redemption struct {
@@ -163,7 +164,8 @@ func Redeem(key string, userId int) (*RedemptionResult, error) {
 	}
 	common.RandomSleep()
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		err := tx.Set("gorm:query_option", "FOR UPDATE").Where(keyCol+" = ?", key).First(redemption).Error
+		policy := GetInvitationPolicy()
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(keyCol+" = ?", key).First(redemption).Error
 		if err != nil {
 			return errors.New("无效的兑换码")
 		}
@@ -190,9 +192,20 @@ func Redeem(key string, userId int) (*RedemptionResult, error) {
 				return err
 			}
 			result.Subscription = sub
+			if policy.MinRedemptionIssuedAt == 0 || redemption.CreatedTime >= policy.MinRedemptionIssuedAt {
+				if err := creditSubscriptionInvitationWithPolicyTx(tx, policy, "subscription_redemption", redemption.Id, userId, plan, sub); err != nil {
+					return err
+				}
+			}
 		} else {
 			err := tx.Model(&User{}).Where("id = ?", userId).Update("quota", gorm.Expr("quota + ?", redemption.Quota)).Error
 			if err != nil {
+				return err
+			}
+		}
+
+		if redemption.Type == RedemptionTypeBalance && (policy.MinRedemptionIssuedAt == 0 || redemption.CreatedTime >= policy.MinRedemptionIssuedAt) {
+			if err := creditInvitationTx(tx, policy, "balance_redemption", redemption.Id, userId, int64(redemption.Quota), policy.BalanceRateBPS, common.GetTimestamp()); err != nil {
 				return err
 			}
 		}

@@ -33,6 +33,7 @@ const { Text } = Typography;
 
 const InvitationCard = ({
   t,
+  policy,
   userState,
   renderQuota,
   setOpenTransfer,
@@ -202,7 +203,9 @@ const InvitationCard = ({
             <div className='flex items-start gap-2'>
               <Badge dot type='success' />
               <Text type='tertiary' className='text-sm'>
-                {t('邀请好友注册，好友充值后您可获得相应奖励')}
+                {t('好友余额充值到账后，您可获得 {{rate}}% 的奖励', {
+                  rate: (policy?.invitation_balance_rate_bps || 0) / 100,
+                })}
               </Text>
             </div>
 
@@ -216,7 +219,12 @@ const InvitationCard = ({
             <div className='flex items-start gap-2'>
               <Badge dot type='success' />
               <Text type='tertiary' className='text-sm'>
-                {t('邀请的好友越多，获得的奖励越多')}
+                {t(
+                  '好友兑换或购买周卡、月卡后，按整张卡总额度的 {{rate}}% 奖励；注册不发放固定奖励',
+                  {
+                    rate: (policy?.invitation_subscription_rate_bps || 0) / 100,
+                  },
+                )}
               </Text>
             </div>
           </div>

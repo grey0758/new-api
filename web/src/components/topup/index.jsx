@@ -45,6 +45,8 @@ const TopUp = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [userState, userDispatch] = useContext(UserContext);
   const [statusState] = useContext(StatusContext);
+  const invitation = statusState?.status || {};
+  const invitationEnabled = invitation.invitation_enabled === true;
 
   const [redemptionCode, setRedemptionCode] = useState('');
   const [amount, setAmount] = useState(0.0);
@@ -783,10 +785,10 @@ const TopUp = () => {
   }, []);
 
   useEffect(() => {
-    if (affFetchedRef.current) return;
+    if (!invitationEnabled || affFetchedRef.current) return;
     affFetchedRef.current = true;
     getAffLink().then();
-  }, []);
+  }, [invitationEnabled]);
 
   // 在 statusState 可用时获取充值信息
   useEffect(() => {
@@ -977,7 +979,9 @@ const TopUp = () => {
       </Modal>
 
       {/* 主布局区域 */}
-      <div className='grid grid-cols-1 lg:grid-cols-2 gap-6'>
+      <div
+        className={`grid grid-cols-1 ${invitationEnabled ? 'lg:grid-cols-2' : ''} gap-6`}
+      >
         <RechargeCard
           t={t}
           enableOnlineTopUp={enableOnlineTopUp}
@@ -1024,14 +1028,17 @@ const TopUp = () => {
           allSubscriptions={allSubscriptions}
           reloadSubscriptionSelf={getSubscriptionSelf}
         />
-        <InvitationCard
-          t={t}
-          userState={userState}
-          renderQuota={renderQuota}
-          setOpenTransfer={setOpenTransfer}
-          affLink={affLink}
-          handleAffLinkClick={handleAffLinkClick}
-        />
+        {invitationEnabled && (
+          <InvitationCard
+            policy={invitation}
+            t={t}
+            userState={userState}
+            renderQuota={renderQuota}
+            setOpenTransfer={setOpenTransfer}
+            affLink={affLink}
+            handleAffLinkClick={handleAffLinkClick}
+          />
+        )}
       </div>
     </div>
   );

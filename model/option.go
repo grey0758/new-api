@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -207,11 +208,31 @@ func InitOptionMap() {
 
 func loadOptionsFromDatabase() {
 	options, _ := AllOption()
+	invitationOptions := make(map[string]string)
 	for _, option := range options {
+		if strings.HasPrefix(option.Key, "invitation_setting.") {
+			invitationOptions[strings.TrimPrefix(option.Key, "invitation_setting.")] = option.Value
+			continue
+		}
 		err := updateOptionMap(option.Key, option.Value)
 		if err != nil {
 			common.SysLog("failed to update option map: " + err.Error())
 		}
+	}
+	// Publish the referral policy as one snapshot on startup and periodic sync,
+	// just as the dedicated policy endpoint does after a transactional save.
+	common.OptionMapRWMutex.Lock()
+	p := *operation_setting.GetInvitationSetting()
+	err := config.UpdateConfigFromMap(&p, invitationOptions)
+	if err == nil {
+		*operation_setting.GetInvitationSetting() = p
+		for key, value := range invitationOptions {
+			common.OptionMap["invitation_setting."+key] = value
+		}
+	}
+	common.OptionMapRWMutex.Unlock()
+	if err != nil {
+		common.SysError("failed to load invitation policy: " + err.Error())
 	}
 }
 
@@ -224,17 +245,27 @@ func SyncOptions(frequency int) {
 }
 
 func UpdateOption(key string, value string) error {
+	if strings.HasPrefix(key, "invitation_setting.") {
+		return errors.New("请通过邀请返佣配置接口保存完整配置")
+	}
+	if err := ValidateInvitationOption(key, value); err != nil {
+		return err
+	}
 	// Save to database first
 	option := Option{
 		Key: key,
 	}
 	// https://gorm.io/docs/update.html#Save-All-Fields
-	DB.FirstOrCreate(&option, Option{Key: key})
+	if err := DB.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
+		return err
+	}
 	option.Value = value
 	// Save is a combination function.
 	// If save value does not contain primary key, it will execute Create,
 	// otherwise it will execute Update (with all fields).
-	DB.Save(&option)
+	if err := DB.Save(&option).Error; err != nil {
+		return err
+	}
 	// Update OptionMap
 	return updateOptionMap(key, value)
 }

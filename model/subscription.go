@@ -581,7 +581,7 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 			return nil, errors.New("已达到该套餐购买上限")
 		}
 	}
-	nowUnix := GetDBTimestamp()
+	nowUnix := getDBTimestampTx(tx)
 	now := time.Unix(nowUnix, 0)
 	endUnix, err := calcPlanEndTime(now, plan)
 	if err != nil {
@@ -646,7 +646,7 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 	var upgradeGroup string
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		var order SubscriptionOrder
-		if err := tx.Set("gorm:query_option", "FOR UPDATE").Where(refCol+" = ?", tradeNo).First(&order).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(refCol+" = ?", tradeNo).First(&order).Error; err != nil {
 			return ErrSubscriptionOrderNotFound
 		}
 		if expectedPaymentMethod != "" && order.PaymentMethod != expectedPaymentMethod {
@@ -658,7 +658,7 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 		if order.Status != common.TopUpStatusPending {
 			return ErrSubscriptionOrderStatusInvalid
 		}
-		plan, err := GetSubscriptionPlanById(order.PlanId)
+		plan, err := getSubscriptionPlanByIdTx(tx, order.PlanId)
 		if err != nil {
 			return err
 		}
@@ -666,7 +666,7 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 			// still allow completion for already purchased orders
 		}
 		upgradeGroup = strings.TrimSpace(plan.UpgradeGroup)
-		_, err = CreateUserSubscriptionFromPlanTx(tx, order.UserId, plan, "order")
+		sub, err := CreateUserSubscriptionFromPlanTx(tx, order.UserId, plan, "order")
 		if err != nil {
 			return err
 		}
@@ -679,6 +679,9 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 			order.ProviderPayload = providerPayload
 		}
 		if err := tx.Save(&order).Error; err != nil {
+			return err
+		}
+		if err := creditSubscriptionInvitationTx(tx, "subscription_order", order.Id, order.UserId, plan, sub); err != nil {
 			return err
 		}
 		logUserId = order.UserId
@@ -746,7 +749,7 @@ func ExpireSubscriptionOrder(tradeNo string, expectedPaymentMethod string) error
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
 		var order SubscriptionOrder
-		if err := tx.Set("gorm:query_option", "FOR UPDATE").Where(refCol+" = ?", tradeNo).First(&order).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(refCol+" = ?", tradeNo).First(&order).Error; err != nil {
 			return ErrSubscriptionOrderNotFound
 		}
 		if expectedPaymentMethod != "" && order.PaymentMethod != expectedPaymentMethod {

@@ -3675,6 +3675,14 @@
     "默认折叠侧边栏": "Default collapse sidebar",
     "默认测试模型": "Default Test Model",
     "默认用户消息": "Default User Message",
-    "默认补全倍率": "Default completion ratio"
+    "默认补全倍率": "Default completion ratio",
+    "邀请返佣": "Referral commissions",
+    "只在配置的站点启用。余额按实际到账额度、周卡和月卡按整张卡总额度计算；注册不发固定奖励，历史已完成交易不会自动补算。": "Enabled only for the configured site. Commissions use credited wallet quota or the full weekly/monthly card allowance. Registration has no fixed reward. Completed historical transactions are not credited automatically.",
+    "开启邀请返佣": "Enable referral commissions",
+    "邀请站点地址": "Referral site URL",
+    "余额充值返佣比例": "Wallet top-up commission rate",
+    "周卡、月卡总额度返佣比例": "Weekly/monthly full allowance commission rate",
+    "好友余额充值到账后，您可获得 {{rate}}% 的奖励": "Receive {{rate}}% when a referred friend adds wallet credit.",
+    "好友兑换或购买周卡、月卡后，按整张卡总额度的 {{rate}}% 奖励；注册不发放固定奖励": "Receive {{rate}}% of the full allowance when a friend redeems or buys a weekly/monthly card. Registration has no fixed reward."
   }
 }
