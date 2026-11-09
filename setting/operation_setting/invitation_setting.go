@@ -12,7 +12,7 @@ type InvitationSetting struct {
 	MinRedemptionIssuedAt int64  `json:"min_redemption_issued_at"`
 }
 
-var invitationSetting = InvitationSetting{BalanceRateBPS: 1000}
+var invitationSetting = InvitationSetting{BalanceRateBPS: 1000, SubscriptionRateBPS: 500}
 
 func init() { config.GlobalConfig.Register("invitation_setting", &invitationSetting) }
 

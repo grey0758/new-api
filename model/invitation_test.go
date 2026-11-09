@@ -22,7 +22,7 @@ func invitationFixture(t *testing.T) (User, User) {
 	common.OptionMapRWMutex.Lock()
 	*operation_setting.GetInvitationSetting() = operation_setting.InvitationSetting{
 		Enabled: true, SiteOrigin: "https://api.open-codex.com", BalanceRateBPS: 1000,
-		SubscriptionRateBPS: 1000, EnabledAt: common.GetTimestamp() - 1,
+		SubscriptionRateBPS: 500, EnabledAt: common.GetTimestamp() - 1,
 	}
 	system_setting.ServerAddress = "https://api.open-codex.com"
 	common.OptionMapRWMutex.Unlock()
@@ -123,10 +123,11 @@ func TestInvitationWeeklyAndWholeMonthlyRedemption(t *testing.T) {
 		days                       int
 		budget, interval, expected int64
 	}{
-		{"weekly350", 7, 175000000, 0, 17500000},
-		{"monthly700", 28, 87500000, 604800, 35000000},
-		{"monthly1400", 28, 175000000, 604800, 70000000},
-		{"monthly2800", 28, 350000000, 604800, 140000000},
+		{"weekly350", 7, 175000000, 0, 8750000},
+		{"weekly700", 7, 350000000, 0, 17500000},
+		{"monthly700", 28, 87500000, 604800, 17500000},
+		{"monthly1400", 28, 175000000, 604800, 35000000},
+		{"monthly2800", 28, 350000000, 604800, 70000000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			inviter, invitee := invitationFixture(t)
@@ -157,7 +158,7 @@ func TestInvitationSubscriptionOrderRepeatedCallback(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		require.NoError(t, CompleteSubscriptionOrder(order.TradeNo, "", order.PaymentMethod))
 	}
-	invitationTotals(t, inviter.Id, 35000000, 35000000)
+	invitationTotals(t, inviter.Id, 17500000, 17500000)
 	var count int64
 	require.NoError(t, DB.Model(&UserSubscription{}).Count(&count).Error)
 	require.EqualValues(t, 1, count)
@@ -397,4 +398,38 @@ func TestInvitationAccumulationBeyond32Bit(t *testing.T) {
 	invitationTotals(t, inviter.Id, prior+500000, prior+500000)
 	require.NoError(t, inviter.TransferAffQuotaToQuota(500000))
 	invitationTotals(t, inviter.Id, prior, prior+500000)
+}
+
+func TestInvitationLaunchPolicyOldUnusedCodesAndNoBackfill(t *testing.T) {
+	inviter, invitee := invitationFixture(t)
+	p := operation_setting.GetInvitationSetting()
+	p.EnabledAt = common.GetTimestamp() - 1
+	p.MinRedemptionIssuedAt = 0
+	oldCode := Redemption{Key: "old-unused-before-launch", Quota: 5000000, CreatedTime: 1}
+	require.NoError(t, oldCode.Insert())
+	_, err := Redeem(oldCode.Key, invitee.Id)
+	require.NoError(t, err)
+	invitationTotals(t, inviter.Id, 500000, 500000)
+	plan := SubscriptionPlan{Id: 92004, Title: "old monthly code", Enabled: true, DurationUnit: "day", DurationValue: 28, TotalAmount: 87500000, QuotaResetPeriod: "custom", QuotaResetCustomSeconds: 604800}
+	require.NoError(t, DB.Create(&plan).Error)
+	InvalidateSubscriptionPlanCache(plan.Id)
+	oldSubscription := Redemption{Key: "old-unused-monthly-before-launch", Type: RedemptionTypeSubscription, SubscriptionPlanId: plan.Id, CreatedTime: 1}
+	require.NoError(t, oldSubscription.Insert())
+	_, err = Redeem(oldSubscription.Key, invitee.Id)
+	require.NoError(t, err)
+	invitationTotals(t, inviter.Id, 18000000, 18000000)
+
+	completed := TopUp{UserId: invitee.Id, TradeNo: "completed-before-launch", Amount: 10, PaymentMethod: "alipay", Status: common.TopUpStatusSuccess, CompleteTime: 1}
+	require.NoError(t, completed.Insert())
+	_, _, applied, err := CompleteBalanceTopUp(completed.TradeNo, completed.PaymentMethod)
+	require.NoError(t, err)
+	require.False(t, applied)
+	used := Redemption{Key: "used-before-launch", Quota: 5000000, Status: common.RedemptionCodeStatusUsed, CreatedTime: 1, RedeemedTime: 1, UsedUserId: invitee.Id}
+	require.NoError(t, DB.Create(&used).Error)
+	_, err = Redeem(used.Key, invitee.Id)
+	require.Error(t, err)
+	invitationTotals(t, inviter.Id, 18000000, 18000000)
+	var count int64
+	require.NoError(t, DB.Model(&InvitationCommission{}).Count(&count).Error)
+	require.EqualValues(t, 2, count)
 }
