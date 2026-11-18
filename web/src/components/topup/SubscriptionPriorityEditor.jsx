@@ -130,7 +130,7 @@ export default function SubscriptionPriorityEditor({
         </Button>
         <Button
           size='small'
-          disabled={saving || priority.length === 0}
+          disabled={saving || (!changed && priority.length === 0)}
           onClick={() => save(true)}
         >
           {t('恢复最早到期优先')}

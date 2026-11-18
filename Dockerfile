@@ -10,7 +10,7 @@ COPY ./VERSION .
 # points to Bun, so Node/V8 heap flags do not constrain this build.
 RUN DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$(cat VERSION) bun --smol ./node_modules/vite/bin/vite.js build
 
-FROM golang:1.26.10-alpine@sha256:27f2d3b83cfc5803c8078f8e730af0f7c431bf067afaec8f60a36fb763187cba AS builder2
+FROM golang:1.26.11-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab AS builder2
 ENV GO111MODULE=on CGO_ENABLED=0
 
 ARG TARGETOS
