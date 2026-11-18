@@ -1,5 +1,14 @@
 {
   "translation": {
+    "套餐使用优先级": "Package usage priority",
+    "按从上到下的顺序使用，额度不足时自动尝试下一个套餐。": "Packages are used from top to bottom. If quota is insufficient, the next package is tried.",
+    "未设置时优先使用最早到期的套餐。": "By default, the package that expires first is used first.",
+    "上移套餐": "Move package up",
+    "下移套餐": "Move package down",
+    "保存使用顺序": "Save usage order",
+    "恢复最早到期优先": "Restore earliest expiry first",
+    "套餐使用顺序已保存": "Package usage order saved",
+    "保存套餐顺序失败": "Failed to save package order",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_one": " + Web search {{count}} time / 1K times * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + Web search {{count}} times / 1K times * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + 图片生成调用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}": " + Image generation call {{symbol}}{{price}} / 1 time * {{ratioType}} {{ratio}}",

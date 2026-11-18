@@ -96,6 +96,7 @@ const RechargeCard = ({
   onChangeBillingPreference,
   activeSubscriptions = [],
   allSubscriptions = [],
+  subscriptionPriority = [],
   reloadSubscriptionSelf,
 }) => {
   const onlineFormApiRef = useRef(null);
@@ -104,7 +105,8 @@ const RechargeCard = ({
   const showAmountSkeleton = useMinimumLoadingTime(amountLoading);
   const [activeTab, setActiveTab] = useState('topup');
   const shouldShowSubscription =
-    !subscriptionLoading && subscriptionPlans.length > 0;
+    !subscriptionLoading &&
+    (subscriptionPlans.length > 0 || allSubscriptions.length > 0);
   const regularPayMethods = payMethods || [];
   const hasExternalPurchaseLinks = presetAmounts.some((preset) =>
     Boolean(preset.purchaseLink),
@@ -729,6 +731,7 @@ const RechargeCard = ({
                 onChangeBillingPreference={onChangeBillingPreference}
                 activeSubscriptions={activeSubscriptions}
                 allSubscriptions={allSubscriptions}
+                subscriptionPriority={subscriptionPriority}
                 reloadSubscriptionSelf={reloadSubscriptionSelf}
                 withCard={false}
               />

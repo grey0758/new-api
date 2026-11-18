@@ -800,6 +800,11 @@ func GetAllActiveUserSubscriptions(userId int) ([]SubscriptionSummary, error) {
 	if err != nil {
 		return nil, err
 	}
+	priority, err := GetSubscriptionConsumptionPriority(userId)
+	if err != nil {
+		return nil, err
+	}
+	orderSubscriptionsForConsumption(subs, priority)
 	return buildSubscriptionSummaries(subs), nil
 }
 
@@ -1237,6 +1242,11 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 		if len(subs) == 0 {
 			return errors.New("no active subscription")
 		}
+		priority, err := getSubscriptionConsumptionPriorityTx(tx, userId)
+		if err != nil {
+			return err
+		}
+		orderSubscriptionsForConsumption(subs, priority)
 		for _, candidate := range subs {
 			sub := candidate
 			plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)

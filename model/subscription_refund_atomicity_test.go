@@ -29,6 +29,7 @@ func setupSubscriptionRefundTestDB(t *testing.T) *gorm.DB {
 	require.NoError(t, db.AutoMigrate(
 		&SubscriptionPlan{},
 		&UserSubscription{},
+		&SubscriptionConsumptionPreference{},
 		&SubscriptionPreConsumeRecord{},
 	))
 

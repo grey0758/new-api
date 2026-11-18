@@ -106,6 +106,7 @@ const TopUp = () => {
     useState('subscription_first');
   const [activeSubscriptions, setActiveSubscriptions] = useState([]);
   const [allSubscriptions, setAllSubscriptions] = useState([]);
+  const [subscriptionPriority, setSubscriptionPriority] = useState([]);
 
   // 预设充值额度选项
   const [presetAmounts, setPresetAmounts] = useState([]);
@@ -569,6 +570,7 @@ const TopUp = () => {
         // All subscriptions (including expired)
         const allSubs = res.data.data?.all_subscriptions || [];
         setAllSubscriptions(allSubs);
+        setSubscriptionPriority(res.data.data?.subscription_priority || []);
       }
     } catch (e) {
       // ignore
@@ -1026,6 +1028,7 @@ const TopUp = () => {
           onChangeBillingPreference={updateBillingPreference}
           activeSubscriptions={activeSubscriptions}
           allSubscriptions={allSubscriptions}
+          subscriptionPriority={subscriptionPriority}
           reloadSubscriptionSelf={getSubscriptionSelf}
         />
         {invitationEnabled && (

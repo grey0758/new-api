@@ -1,5 +1,14 @@
 {
   "translation": {
+    "套餐使用优先级": "套餐使用优先级",
+    "按从上到下的顺序使用，额度不足时自动尝试下一个套餐。": "按从上到下的顺序使用，额度不足时自动尝试下一个套餐。",
+    "未设置时优先使用最早到期的套餐。": "未设置时优先使用最早到期的套餐。",
+    "上移套餐": "上移套餐",
+    "下移套餐": "下移套餐",
+    "保存使用顺序": "保存使用顺序",
+    "恢复最早到期优先": "恢复最早到期优先",
+    "套餐使用顺序已保存": "套餐使用顺序已保存",
+    "保存套餐顺序失败": "保存套餐顺序失败",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + 图片生成调用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}": " + 图片生成调用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}",
     " + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",

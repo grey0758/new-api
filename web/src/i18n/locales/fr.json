@@ -1,5 +1,14 @@
 {
   "translation": {
+    "套餐使用优先级": "Priorité des forfaits",
+    "按从上到下的顺序使用，额度不足时自动尝试下一个套餐。": "Les forfaits sont utilisés de haut en bas. Si le quota est insuffisant, le forfait suivant est essayé.",
+    "未设置时优先使用最早到期的套餐。": "Par défaut, le forfait qui expire le plus tôt est utilisé en premier.",
+    "上移套餐": "Monter le forfait",
+    "下移套餐": "Descendre le forfait",
+    "保存使用顺序": "Enregistrer l’ordre",
+    "恢复最早到期优先": "Rétablir la priorité à la première expiration",
+    "套餐使用顺序已保存": "Ordre des forfaits enregistré",
+    "保存套餐顺序失败": "Échec de l’enregistrement de l’ordre",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_one": " + Recherche Web {{count}} fois / 1K fois * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_many": " + Recherche Web {{count}} fois / 1K fois * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + Recherche Web {{count}} fois / 1K fois * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",

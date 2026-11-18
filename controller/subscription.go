@@ -41,6 +41,11 @@ func GetSubscriptionPlans(c *gin.Context) {
 
 func GetSubscriptionSelf(c *gin.Context) {
 	userId := c.GetInt("id")
+	priority, err := model.GetSubscriptionConsumptionPriority(userId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	settingMap, _ := model.GetUserSetting(userId, false)
 	pref := common.NormalizeBillingPreference(settingMap.BillingPreference)
 
@@ -57,10 +62,26 @@ func GetSubscriptionSelf(c *gin.Context) {
 	}
 
 	common.ApiSuccess(c, gin.H{
-		"billing_preference": pref,
-		"subscriptions":      activeSubscriptions, // all active subscriptions
-		"all_subscriptions":  allSubscriptions,    // all subscriptions including expired
+		"subscription_priority": priority,
+		"billing_preference":    pref,
+		"subscriptions":         activeSubscriptions, // all active subscriptions
+		"all_subscriptions":     allSubscriptions,    // all subscriptions including expired
 	})
+}
+
+func UpdateSubscriptionPriority(c *gin.Context) {
+	var req struct {
+		SubscriptionIds *[]int `json:"subscription_ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.SubscriptionIds == nil {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	if err := model.SetSubscriptionConsumptionPriority(c.GetInt("id"), *req.SubscriptionIds); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{"subscription_priority": *req.SubscriptionIds})
 }
 
 func UpdateSubscriptionPreference(c *gin.Context) {

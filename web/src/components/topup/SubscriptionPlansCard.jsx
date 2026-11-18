@@ -35,6 +35,7 @@ import { getCurrencyConfig } from '../../helpers/render';
 import { getSubscriptionPrice } from '../../helpers/subscriptionPrice.mjs';
 import { RefreshCw, Sparkles } from 'lucide-react';
 import SubscriptionPurchaseModal from './modals/SubscriptionPurchaseModal';
+import SubscriptionPriorityEditor from './SubscriptionPriorityEditor';
 import {
   formatSubscriptionDuration,
   formatSubscriptionResetPeriod,
@@ -88,6 +89,7 @@ const SubscriptionPlansCard = ({
   onChangeBillingPreference,
   activeSubscriptions = [],
   allSubscriptions = [],
+  subscriptionPriority = [],
   reloadSubscriptionSelf,
   withCard = true,
 }) => {
@@ -381,6 +383,13 @@ const SubscriptionPlansCard = ({
               </Text>
             )}
 
+            <SubscriptionPriorityEditor
+              t={t}
+              subscriptions={activeSubscriptions}
+              priority={subscriptionPriority}
+              planTitleMap={planTitleMap}
+              reload={reloadSubscriptionSelf}
+            />
             {hasAnySubscription ? (
               <>
                 <Divider margin={8} />
