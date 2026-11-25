@@ -26,7 +26,8 @@ func (transport krillFixtureTransport) RoundTrip(req *http.Request) (*http.Respo
 
 func TestKrillResponsesStreamSettlementAndFailover(t *testing.T) {
 	const (
-		primaryURL = "https://sub2api.9gpt.net"
+		publicURL  = "https://sub2api.9gpt.net"
+		privateURL = "http://sub2api-krill:8080"
 		backupURL  = "https://backup.invalid"
 		modelName  = "gpt-4o-mini"
 		tokenKey   = "krillstreamfixturetoken"
@@ -37,14 +38,16 @@ func TestKrillResponsesStreamSettlementAndFailover(t *testing.T) {
 	)
 	for _, tc := range []struct {
 		name         string
+		primaryURL   string
 		primary      string
 		wantBackup   bool
 		wantRefund   bool
 		wantResponse string
 	}{
-		{"disconnect after output", partial + failed, false, true, partial + failed},
-		{"disconnect before output", failed, true, false, completed},
-		{"completed", partial + completed, false, false, partial + completed},
+		{"public endpoint disconnect after output", publicURL, partial + failed, false, true, partial + failed},
+		{"private endpoint disconnect after output", privateURL, partial + failed, false, true, partial + failed},
+		{"disconnect before output", privateURL, failed, true, false, completed},
+		{"completed", privateURL, partial + completed, false, false, partial + completed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setupRelayRouterTestDB(t)
@@ -52,7 +55,7 @@ func TestKrillResponsesStreamSettlementAndFailover(t *testing.T) {
 			common.RetryTimes, constant.ErrorLogEnabled = 2, true
 			t.Cleanup(func() { common.RetryTimes, constant.ErrorLogEnabled = oldRetry, oldErrorLog })
 
-			primary := createRelayTestChannel(t, "krill-fixture", primaryURL, 1000, 100, modelName)
+			primary := createRelayTestChannel(t, "krill-fixture", tc.primaryURL, 1000, 100, modelName)
 			originalChannelID := primary.Id
 			require.NoError(t, model.DB.Model(primary).Update("id", 84).Error)
 			require.NoError(t, model.DB.Model(&model.Ability{}).Where("channel_id = ?", originalChannelID).Update("channel_id", 84).Error)
@@ -92,7 +95,7 @@ func TestKrillResponsesStreamSettlementAndFailover(t *testing.T) {
 			engine.ServeHTTP(rec, req)
 			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 			require.Equal(t, tc.wantResponse, rec.Body.String())
-			wantURLs := []string{primaryURL + "/v1/responses"}
+			wantURLs := []string{tc.primaryURL + "/v1/responses"}
 			settlementChannel := 84
 			if tc.wantBackup {
 				wantURLs = append(wantURLs, backupURL+"/v1/responses")

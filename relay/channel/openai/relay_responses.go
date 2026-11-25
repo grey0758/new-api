@@ -264,9 +264,12 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 }
 
 func isCommittedKrillStreamDisconnect(c *gin.Context, info *relaycommon.RelayInfo, err *types.NewAPIError) bool {
+	if info.ChannelMeta == nil || info.ChannelId != 84 || info.RelayMode != relayconstant.RelayModeResponses {
+		return false
+	}
+	baseURL := strings.TrimRight(info.ChannelBaseUrl, "/")
 	return err.GetErrorCode() == "upstream_stream_incomplete" &&
-		info.ChannelMeta != nil && info.ChannelId == 84 && info.RelayMode == relayconstant.RelayModeResponses &&
-		strings.TrimRight(info.ChannelBaseUrl, "/") == "https://sub2api.9gpt.net" &&
+		(baseURL == "https://sub2api.9gpt.net" || baseURL == "http://sub2api-krill:8080") &&
 		c.Request.URL.Path == "/v1/responses" && c.Writer.Written()
 }
 
