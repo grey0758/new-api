@@ -119,6 +119,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if newAPIError != nil {
 			logger.LogError(c, fmt.Sprintf("relay error: %s", newAPIError.Error()))
 			service.RecordFinalChannelHealthError(c, newAPIError)
+			if relayFormat == types.RelayFormatOpenAIResponses && c.Writer.Written() && service.IsResponsesStreamIncompleteError(newAPIError) {
+				// A committed Responses stream already reported this failure in-band.
+				return
+			}
 			newAPIError = sanitizeRelayErrorForUser(c, newAPIError)
 			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
 			switch relayFormat {

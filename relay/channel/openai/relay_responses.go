@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
@@ -224,6 +225,12 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		if info.SendResponseCount == 0 && c != nil && c.Writer != nil && !c.Writer.Written() {
 			return nil, streamErr
 		}
+		if !completed && isCommittedKrillStreamDisconnect(c, info, streamErr) {
+			// Sub2API has already sent the failure frame. Let the relay refund
+			// precharge instead of settling from the partial text.
+			return nil, types.NewOpenAIError(streamErr.Unwrap(), types.ErrorCodeResponsesStreamIncomplete,
+				http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+		}
 		logger.LogError(c, streamErr.Error())
 	}
 
@@ -254,6 +261,13 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 
 	return usage, nil
+}
+
+func isCommittedKrillStreamDisconnect(c *gin.Context, info *relaycommon.RelayInfo, err *types.NewAPIError) bool {
+	return err.GetErrorCode() == "upstream_stream_incomplete" &&
+		info.ChannelMeta != nil && info.ChannelId == 84 && info.RelayMode == relayconstant.RelayModeResponses &&
+		strings.TrimRight(info.ChannelBaseUrl, "/") == "https://sub2api.9gpt.net" &&
+		c.Request.URL.Path == "/v1/responses" && c.Writer.Written()
 }
 
 func isResponsesStreamFatalEvent(streamResponse dto.ResponsesStreamResponse) bool {
