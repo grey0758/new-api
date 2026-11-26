@@ -18,6 +18,9 @@ var group2model2channels map[string]map[string][]int // enabled channel
 var channelsIDM map[int]*Channel                     // all channels include disabled
 var channelSyncLock sync.RWMutex
 
+// ErrNoUntriedChannel signals that no cached candidate remains after exclusions.
+var ErrNoUntriedChannel = errors.New("no untried channel found")
+
 func InitChannelCache() {
 	if !common.MemoryCacheEnabled {
 		return
@@ -224,7 +227,7 @@ func chooseBestAvailableCachedChannel(group string, model string, channels []int
 	}
 
 	if len(targetChannels) == 0 {
-		return nil, errors.New(fmt.Sprintf("no untried channel found, group: %s, model: %s", group, model))
+		return nil, fmt.Errorf("%w, group: %s, model: %s", ErrNoUntriedChannel, group, model)
 	}
 
 	return chooseWeightedCachedChannel(targetChannels)

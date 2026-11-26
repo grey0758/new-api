@@ -14,7 +14,9 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestRelayRetryableErrorExcludesFailedChannel(t *testing.T) {
@@ -121,31 +123,57 @@ func TestRelayAffinitySkipAllowsBalanceFailoverBeforeCooldown(t *testing.T) {
 
 func TestRelayAffinitySkipAllowsRetryAfterChannelCooldown(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	logDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := logDB.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	require.NoError(t, logDB.AutoMigrate(&model.Log{}))
+	originalLogDB := model.LOG_DB
+	model.LOG_DB = logDB
+	t.Cleanup(func() {
+		model.LOG_DB = originalLogDB
+		require.NoError(t, sqlDB.Close())
+	})
+
 	originalCooldownEnabled := common.AutomaticChannelCooldownEnabled
 	originalCooldownThreshold := common.ChannelCooldownFailureThreshold
 	originalCooldownWindow := common.ChannelCooldownFailureWindowSeconds
 	originalCooldownSeconds := common.ChannelCooldownSeconds
+	originalProbeEnabled := common.ChannelCooldownProbeEnabled
+	originalRedisEnabled := common.RedisEnabled
+	originalAutoDisable := common.AutomaticDisableChannelEnabled
+	const channelID = 126
 	t.Cleanup(func() {
+		service.ClearChannelCooldown(channelID)
 		common.AutomaticChannelCooldownEnabled = originalCooldownEnabled
 		common.ChannelCooldownFailureThreshold = originalCooldownThreshold
 		common.ChannelCooldownFailureWindowSeconds = originalCooldownWindow
 		common.ChannelCooldownSeconds = originalCooldownSeconds
+		common.ChannelCooldownProbeEnabled = originalProbeEnabled
+		common.RedisEnabled = originalRedisEnabled
+		common.AutomaticDisableChannelEnabled = originalAutoDisable
 	})
 	common.AutomaticChannelCooldownEnabled = true
 	common.ChannelCooldownFailureThreshold = 1
 	common.ChannelCooldownFailureWindowSeconds = 120
 	common.ChannelCooldownSeconds = 300
+	common.ChannelCooldownProbeEnabled = false
+	common.RedisEnabled = false
+	common.AutomaticDisableChannelEnabled = false
 
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Set("channel_affinity_skip_retry_on_failure", true)
-	err := types.NewErrorWithStatusCode(
-		errors.New("upstream quota exhausted"),
+	upstreamErr := types.NewErrorWithStatusCode(
+		errors.New("provider rejected the request"),
 		types.ErrorCodeBadResponseStatusCode,
 		http.StatusForbidden,
 	)
-	service.RecordChannelFailureForCooldown(*types.NewChannelError(126, 1, "cooling-test", false, "test-key", false), err)
-
-	require.True(t, shouldRetry(c, err, 1, 126))
+	require.False(t, shouldRetry(c, upstreamErr, 1, channelID))
+	channel := types.NewChannelError(channelID, 1, "cooling-test", false, "", false)
+	service.RecordChannelFailureForCooldown(*channel, upstreamErr)
+	require.True(t, service.IsChannelCoolingDown(channelID))
+	require.True(t, shouldRetry(c, upstreamErr, 1, channelID))
 }
 
 func TestRelayAffinitySkipAllowsRetryForTransientCredentialCooldown429(t *testing.T) {

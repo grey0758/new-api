@@ -101,8 +101,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	//originalModel := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 
 	var (
-		newAPIError *types.NewAPIError
-		ws          *websocket.Conn
+		newAPIError          *types.NewAPIError
+		reselectResponseCode int
+		ws                   *websocket.Conn
 	)
 
 	if relayFormat == types.RelayFormatOpenAIRealtime {
@@ -134,7 +135,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 					"error": newAPIError.ToClaudeError(),
 				})
 			default:
-				c.JSON(newAPIError.StatusCode, gin.H{
+				status := newAPIError.StatusCode
+				if reselectResponseCode != 0 {
+					status = reselectResponseCode
+				}
+				c.JSON(status, gin.H{
 					"error": newAPIError.ToOpenAIError(),
 				})
 			}
@@ -293,6 +298,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
+	krillTextEndpoint := (relayFormat == types.RelayFormatOpenAIResponses && c.Request.URL.Path == "/v1/responses") ||
+		(relayFormat == types.RelayFormatOpenAI && c.Request.URL.Path == "/v1/chat/completions")
+	var krillUnavailableStatus int
 
 	for cycle := 0; cycle < maxRelayChannelSelectionCycles(c, relayInfo); cycle++ {
 		if cycle > 0 {
@@ -302,9 +310,25 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 			relayInfo.RetryIndex = retryParam.GetRetry()
 			channel, channelErr := getChannel(c, relayInfo, retryParam)
+			reselectResponseCode = 0
 			if channelErr != nil {
 				logger.LogError(c, channelErr.Error())
 				newAPIError = channelErr
+				if krillUnavailableStatus != 0 && !c.Writer.Written() &&
+					c.Request.Context().Err() == nil &&
+					(errors.Is(channelErr, errNoAvailableRelayChannel) || errors.Is(channelErr, model.ErrNoUntriedChannel)) {
+					// Keep the selection error for observability and billing.
+					if last := relayInfo.LastError; last != nil {
+						switch {
+						case last.StatusCode == http.StatusBadGateway || last.StatusCode == http.StatusServiceUnavailable:
+							reselectResponseCode = last.StatusCode
+						case last.StatusCode == http.StatusNotFound &&
+							common.GetContextKeyInt(c, constant.ContextKeyChannelId) == 47 &&
+							strings.Contains(strings.ToLower(last.Error()), "no route available for the requested model"):
+							reselectResponseCode = krillUnavailableStatus
+						}
+					}
+				}
 				break
 			}
 
@@ -355,6 +379,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = service.NormalizeResponsesHistoryIDError(newAPIError)
 			newAPIError = service.NormalizeViolationFeeError(newAPIError)
 			relayInfo.LastError = newAPIError
+			// The first attempt uses the URL selected by the distributor.
+			if krillTextEndpoint && (channel.Id == 84 || channel.Id == 85) &&
+				common.GetContextKeyString(c, constant.ContextKeyChannelBaseUrl) == "http://sub2api-krill:8080" &&
+				(newAPIError.StatusCode == http.StatusBadGateway || newAPIError.StatusCode == http.StatusServiceUnavailable) {
+				krillUnavailableStatus = newAPIError.StatusCode
+			}
 			if relayInfo.IsOuterToolsStream() && c.Request.Context().Err() != nil {
 				// Caller cancellation is not provider failure. Preserve the normal
 				// error/refund cleanup without cooldown or another upstream turn.
@@ -393,6 +423,8 @@ var upgrader = websocket.Upgrader{
 const relayChannelSelectionCycles = 2
 
 const unsupportedChannelEndpointCode types.ErrorCode = "unsupported_channel_endpoint"
+
+var errNoAvailableRelayChannel = errors.New("的可用渠道不存在（retry）")
 
 func unsupportedChannelEndpointError() *types.NewAPIError {
 	return types.NewErrorWithStatusCode(
@@ -515,13 +547,13 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
 
 	if err != nil {
-		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, info.OriginModelName, err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %w", selectGroup, info.OriginModelName, err), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 	if channel == nil {
 		if unsupportedEndpointSeen {
 			return nil, unsupportedChannelEndpointError()
 		}
-		return nil, types.NewError(fmt.Errorf("分组 %s 下模型 %s 的可用渠道不存在（retry）", selectGroup, info.OriginModelName), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		return nil, types.NewError(fmt.Errorf("分组 %s 下模型 %s %w", selectGroup, info.OriginModelName, errNoAvailableRelayChannel), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 
 	newAPIError := middleware.SetupContextForSelectedChannel(c, channel, info.OriginModelName)
