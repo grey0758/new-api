@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -28,6 +29,7 @@ func TestKrillResponsesStreamSettlementAndFailover(t *testing.T) {
 	const (
 		publicURL  = "https://sub2api.9gpt.net"
 		privateURL = "http://sub2api-krill:8080"
+		directURL  = "https://api.kbsfdxc.net/codex"
 		backupURL  = "https://backup.invalid"
 		modelName  = "gpt-4o-mini"
 		tokenKey   = "krillstreamfixturetoken"
@@ -35,19 +37,28 @@ func TestKrillResponsesStreamSettlementAndFailover(t *testing.T) {
 		partial    = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"partial output\"}\n\n"
 		failed     = "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"upstream_stream_incomplete\",\"message\":\"Upstream response ended before a terminal event\"}}}\n\n"
 		completed  = "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":13,\"output_tokens\":5,\"total_tokens\":18}}}\n\n"
+		incomplete = "event: response.incomplete\ndata: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n"
 	)
 	for _, tc := range []struct {
 		name         string
+		primaryID    int
 		primaryURL   string
 		primary      string
 		wantBackup   bool
 		wantRefund   bool
 		wantResponse string
+		readError    bool
 	}{
-		{"public endpoint disconnect after output", publicURL, partial + failed, false, true, partial + failed},
-		{"private endpoint disconnect after output", privateURL, partial + failed, false, true, partial + failed},
-		{"disconnect before output", privateURL, failed, true, false, completed},
-		{"completed", privateURL, partial + completed, false, false, partial + completed},
+		{"84 legacy endpoint failure", 84, publicURL, partial + failed, false, true, partial + failed, false},
+		{"84 private endpoint failure", 84, privateURL, partial + failed, false, true, partial + failed, false},
+		{"85 private endpoint failure", 85, privateURL, partial + failed, false, true, partial + failed, false},
+		{"47 disconnect after output", 47, directURL, partial, false, true, "", false},
+		{"47 read failure after output", 47, directURL, partial, false, true, "", true},
+		{"85 disconnect before output", 85, privateURL, failed, true, false, completed, false},
+		{"47 disconnect before output", 47, directURL, "", true, false, completed, false},
+		{"85 completed", 85, privateURL, partial + completed, false, false, partial + completed, false},
+		{"47 legitimate incomplete", 47, directURL, partial + incomplete, false, false, partial + incomplete, false},
+		{"85 with another provider", 85, "https://other.invalid", partial + failed, false, false, partial + failed, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setupRelayRouterTestDB(t)
@@ -57,8 +68,8 @@ func TestKrillResponsesStreamSettlementAndFailover(t *testing.T) {
 
 			primary := createRelayTestChannel(t, "krill-fixture", tc.primaryURL, 1000, 100, modelName)
 			originalChannelID := primary.Id
-			require.NoError(t, model.DB.Model(primary).Update("id", 84).Error)
-			require.NoError(t, model.DB.Model(&model.Ability{}).Where("channel_id = ?", originalChannelID).Update("channel_id", 84).Error)
+			require.NoError(t, model.DB.Model(primary).Update("id", tc.primaryID).Error)
+			require.NoError(t, model.DB.Model(&model.Ability{}).Where("channel_id = ?", originalChannelID).Update("channel_id", tc.primaryID).Error)
 			backup := createRelayTestChannel(t, "backup-fixture", backupURL, 100, 100, modelName)
 			createRelayTestUserAndToken(t, 1, tokenKey)
 			var user model.User
@@ -82,8 +93,12 @@ func TestKrillResponsesStreamSettlementAndFailover(t *testing.T) {
 				if req.URL.Host == "backup.invalid" {
 					body = completed
 				}
+				var reader io.Reader = strings.NewReader(body)
+				if tc.readError && req.URL.Host != "backup.invalid" {
+					reader = io.MultiReader(reader, iotest.ErrReader(io.ErrUnexpectedEOF))
+				}
 				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}},
-					Body: io.NopCloser(strings.NewReader(body))}, nil
+					Body: io.NopCloser(reader)}, nil
 			})
 			engine := gin.New()
 			engine.Use(middleware.RequestId())
@@ -94,9 +109,22 @@ func TestKrillResponsesStreamSettlementAndFailover(t *testing.T) {
 			rec := httptest.NewRecorder()
 			engine.ServeHTTP(rec, req)
 			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-			require.Equal(t, tc.wantResponse, rec.Body.String())
+			if tc.wantResponse != "" {
+				require.Equal(t, tc.wantResponse, rec.Body.String())
+			} else {
+				body := rec.Body.String()
+				require.True(t, strings.HasPrefix(body, partial+"event: response.failed\ndata: "))
+				data := strings.TrimPrefix(body, partial+"event: response.failed\ndata: ")
+				require.True(t, strings.HasSuffix(data, "\n\n"))
+				var event dto.ResponsesStreamResponse
+				require.NoError(t, common.UnmarshalJsonStr(data, &event))
+				require.Equal(t, "response.failed", event.Type)
+				require.NotNil(t, event.Response)
+				require.NotNil(t, event.Response.GetOpenAIError())
+				require.Equal(t, "upstream_stream_incomplete", event.Response.GetOpenAIError().Code)
+			}
 			wantURLs := []string{tc.primaryURL + "/v1/responses"}
-			settlementChannel := 84
+			settlementChannel := tc.primaryID
 			if tc.wantBackup {
 				wantURLs = append(wantURLs, backupURL+"/v1/responses")
 				settlementChannel = backup.Id
@@ -118,7 +146,7 @@ func TestKrillResponsesStreamSettlementAndFailover(t *testing.T) {
 				var failure []model.Log
 				require.NoError(t, model.LOG_DB.Where("request_id = ? AND type = ?", requestID, model.LogTypeError).Find(&failure).Error)
 				require.Len(t, failure, 1)
-				require.Equal(t, 84, failure[0].ChannelId)
+				require.Equal(t, tc.primaryID, failure[0].ChannelId)
 				require.Contains(t, failure[0].Other, `"error_code":"responses_stream_incomplete"`)
 				require.Contains(t, failure[0].Other, `"status_code":502`)
 			} else {

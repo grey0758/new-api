@@ -21,6 +21,8 @@ import (
 const (
 	responsesStreamGuardMaxBufferedEvents = 16
 	responsesStreamGuardMaxBufferedBytes  = 64 << 10
+	krillStreamDisconnectCode             = "upstream_stream_incomplete"
+	krillStreamDisconnectMessage          = "Upstream response ended before a terminal event"
 )
 
 type responsesStreamBufferedChunk struct {
@@ -97,6 +99,8 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	var streamErr *types.NewAPIError
 	modelName := responsesStreamModelName(info)
 	channelID := responsesStreamChannelID(info)
+	krillStream := isKrillResponsesStream(c, info)
+	krillTerminal := false
 
 	guardStream := true
 	if !service.ShouldGuardResponsesStream(c, modelName) {
@@ -203,11 +207,20 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 
 		processStreamResponse(streamResponse)
+		if krillStream {
+			switch streamResponse.Type {
+			case "response.incomplete", "response.cancelled", "response.canceled":
+				krillTerminal = true
+			case "error":
+				// A committed stream can already carry a top-level error event.
+				krillTerminal = krillTerminal || c.Writer.Written()
+			}
+		}
 
 		if !guardCommitted {
 			bufferedChunks = append(bufferedChunks, responsesStreamBufferedChunk{data: data, response: streamResponse})
 			bufferedBytes += len(data)
-			if shouldCommitResponsesStreamGuard(streamResponse, len(bufferedChunks), bufferedBytes) {
+			if krillTerminal || shouldCommitResponsesStreamGuard(streamResponse, len(bufferedChunks), bufferedBytes) {
 				flushBufferedChunks()
 				guardCommitted = true
 			}
@@ -225,16 +238,26 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		if info.SendResponseCount == 0 && c != nil && c.Writer != nil && !c.Writer.Written() {
 			return nil, streamErr
 		}
-		if !completed && isCommittedKrillStreamDisconnect(c, info, streamErr) {
-			// Sub2API has already sent the failure frame. Let the relay refund
-			// precharge instead of settling from the partial text.
-			return nil, types.NewOpenAIError(streamErr.Unwrap(), types.ErrorCodeResponsesStreamIncomplete,
-				http.StatusBadGateway, types.ErrOptionWithSkipRetry())
-		}
 		logger.LogError(c, streamErr.Error())
 	}
 
-	if !completed && (streamErr == nil || shouldFailoverResponsesStreamFatalError(streamErr)) && !(info.IsOuterToolsStream() && c.Request.Context().Err() != nil) {
+	if krillStream && !completed && !krillTerminal && c.Writer.Written() && c.Request.Context().Err() == nil {
+		if streamErr.GetErrorCode() == krillStreamDisconnectCode {
+			// The upstream failure frame was already forwarded.
+			return nil, krillStreamDisconnectError(info)
+		}
+		if streamErr == nil && (info.StreamStatus.EndReason == relaycommon.StreamEndReasonEOF ||
+			info.StreamStatus.EndReason == relaycommon.StreamEndReasonScannerErr) {
+			if err := sendKrillStreamDisconnect(c, info); err != nil {
+				logger.LogError(c, "failed to encode Krill stream failure: "+err.Error())
+			}
+			service.RecordResponsesStreamFailover(c, modelName, channelID)
+			service.RecordResponsesStreamGuard(c, modelName)
+			return nil, krillStreamDisconnectError(info)
+		}
+	}
+
+	if !completed && !krillTerminal && (streamErr == nil || shouldFailoverResponsesStreamFatalError(streamErr)) && !(info.IsOuterToolsStream() && c.Request.Context().Err() != nil) {
 		err := fmt.Errorf("responses stream closed before response.completed: end=%s received=%d sent=%d", info.StreamStatus.Summary(), info.ReceivedResponseCount, info.SendResponseCount)
 		service.RecordResponsesStreamFailover(c, modelName, channelID)
 		service.RecordResponsesStreamGuard(c, modelName)
@@ -263,14 +286,49 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	return usage, nil
 }
 
-func isCommittedKrillStreamDisconnect(c *gin.Context, info *relaycommon.RelayInfo, err *types.NewAPIError) bool {
-	if info.ChannelMeta == nil || info.ChannelId != 84 || info.RelayMode != relayconstant.RelayModeResponses {
+func isKrillResponsesStream(c *gin.Context, info *relaycommon.RelayInfo) bool {
+	if info == nil || info.ChannelMeta == nil || info.RelayMode != relayconstant.RelayModeResponses ||
+		c.Request.URL.Path != "/v1/responses" {
 		return false
 	}
 	baseURL := strings.TrimRight(info.ChannelBaseUrl, "/")
-	return err.GetErrorCode() == "upstream_stream_incomplete" &&
-		(baseURL == "https://sub2api.9gpt.net" || baseURL == "http://sub2api-krill:8080") &&
-		c.Request.URL.Path == "/v1/responses" && c.Writer.Written()
+	switch info.ChannelId {
+	case 47:
+		return usesKrillCodexHistoryCompatibility(info)
+	case 84, 85:
+		return baseURL == "http://sub2api-krill:8080" || baseURL == "https://sub2api.9gpt.net" ||
+			baseURL == "https://sub2api.opencodex.uk"
+	default:
+		return false
+	}
+}
+
+func krillStreamDisconnectError(info *relaycommon.RelayInfo) *types.NewAPIError {
+	return types.NewOpenAIError(fmt.Errorf("%s: end=%s received=%d sent=%d", krillStreamDisconnectMessage,
+		info.StreamStatus.EndReason, info.ReceivedResponseCount, info.SendResponseCount),
+		types.ErrorCodeResponsesStreamIncomplete, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+}
+
+func sendKrillStreamDisconnect(c *gin.Context, info *relaycommon.RelayInfo) error {
+	responseID := c.GetString("relay_response_id")
+	if responseID == "" {
+		responseID = "resp_" + c.GetString(common.RequestIdKey)
+	}
+	const eventType = "response.failed"
+	payload, err := common.Marshal(map[string]any{
+		"type": eventType,
+		"response": map[string]any{
+			"id": responseID, "object": "response", "model": info.UpstreamModelName,
+			"status": "failed", "output": []any{},
+			"error": map[string]string{"code": krillStreamDisconnectCode, "message": krillStreamDisconnectMessage},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	// Earlier chunks were framed by the relay, including the final blank line.
+	sendResponsesStreamData(c, info, dto.ResponsesStreamResponse{Type: eventType}, string(payload))
+	return nil
 }
 
 func isResponsesStreamFatalEvent(streamResponse dto.ResponsesStreamResponse) bool {
