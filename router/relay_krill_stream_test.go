@@ -1,6 +1,7 @@
 package router
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -23,6 +24,19 @@ type krillFixtureTransport func(*http.Request) (*http.Response, error)
 
 func (transport krillFixtureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return transport(req)
+}
+
+type cancelOnKrillEventRecorder struct {
+	*httptest.ResponseRecorder
+	event  string
+	cancel context.CancelFunc
+}
+
+func (r *cancelOnKrillEventRecorder) Flush() {
+	r.ResponseRecorder.Flush()
+	if strings.Contains(r.Body.String(), "event: "+r.event+"\n") {
+		r.cancel()
+	}
 }
 
 func TestKrillResponsesStreamSettlementAndFailover(t *testing.T) {
@@ -48,17 +62,22 @@ func TestKrillResponsesStreamSettlementAndFailover(t *testing.T) {
 		wantRefund   bool
 		wantResponse string
 		readError    bool
+		cancelOn     string
 	}{
-		{"84 legacy endpoint failure", 84, publicURL, partial + failed, false, true, partial + failed, false},
-		{"84 private endpoint failure", 84, privateURL, partial + failed, false, true, partial + failed, false},
-		{"85 private endpoint failure", 85, privateURL, partial + failed, false, true, partial + failed, false},
-		{"47 disconnect after output", 47, directURL, partial, false, true, "", false},
-		{"47 read failure after output", 47, directURL, partial, false, true, "", true},
-		{"85 disconnect before output", 85, privateURL, failed, true, false, completed, false},
-		{"47 disconnect before output", 47, directURL, "", true, false, completed, false},
-		{"85 completed", 85, privateURL, partial + completed, false, false, partial + completed, false},
-		{"47 legitimate incomplete", 47, directURL, partial + incomplete, false, false, partial + incomplete, false},
-		{"85 with another provider", 85, "https://other.invalid", partial + failed, false, false, partial + failed, false},
+		{"84 legacy endpoint failure", 84, publicURL, partial + failed, false, true, partial + failed, false, ""},
+		{"84 private endpoint failure", 84, privateURL, partial + failed, false, true, partial + failed, false, ""},
+		{"85 private endpoint failure", 85, privateURL, partial + failed, false, true, partial + failed, false, ""},
+		{"47 client closes on failure", 47, directURL, partial + failed, false, true, partial + failed, false, "response.failed"},
+		{"84 client closes on failure", 84, privateURL, partial + failed, false, true, partial + failed, false, "response.failed"},
+		{"85 client closes on failure", 85, privateURL, partial + failed, false, true, partial + failed, false, "response.failed"},
+		{"85 client cancels without failure", 85, privateURL, partial, false, false, partial, false, "response.output_text.delta"},
+		{"47 disconnect after output", 47, directURL, partial, false, true, "", false, ""},
+		{"47 read failure after output", 47, directURL, partial, false, true, "", true, ""},
+		{"85 disconnect before output", 85, privateURL, failed, true, false, completed, false, ""},
+		{"47 disconnect before output", 47, directURL, "", true, false, completed, false, ""},
+		{"85 completed", 85, privateURL, partial + completed, false, false, partial + completed, false, ""},
+		{"47 legitimate incomplete", 47, directURL, partial + incomplete, false, false, partial + incomplete, false, ""},
+		{"85 with another provider", 85, "https://other.invalid", partial + failed, false, false, partial + failed, false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setupRelayRouterTestDB(t)
@@ -107,7 +126,14 @@ func TestKrillResponsesStreamSettlementAndFailover(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Authorization", "Bearer sk-"+tokenKey)
 			rec := httptest.NewRecorder()
-			engine.ServeHTTP(rec, req)
+			if tc.cancelOn != "" {
+				ctx, cancel := context.WithCancel(req.Context())
+				defer cancel()
+				engine.ServeHTTP(&cancelOnKrillEventRecorder{ResponseRecorder: rec, event: tc.cancelOn, cancel: cancel}, req.WithContext(ctx))
+				require.ErrorIs(t, ctx.Err(), context.Canceled)
+			} else {
+				engine.ServeHTTP(rec, req)
+			}
 			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 			if tc.wantResponse != "" {
 				require.Equal(t, tc.wantResponse, rec.Body.String())

@@ -241,12 +241,12 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		logger.LogError(c, streamErr.Error())
 	}
 
-	if krillStream && !completed && !krillTerminal && c.Writer.Written() && c.Request.Context().Err() == nil {
+	if krillStream && !completed && !krillTerminal && c.Writer.Written() {
 		if streamErr.GetErrorCode() == krillStreamDisconnectCode {
-			// The upstream failure frame was already forwarded.
+			// A parsed upstream failure still requires a refund if the client disconnects.
 			return nil, krillStreamDisconnectError(info)
 		}
-		if streamErr == nil && (info.StreamStatus.EndReason == relaycommon.StreamEndReasonEOF ||
+		if streamErr == nil && c.Request.Context().Err() == nil && (info.StreamStatus.EndReason == relaycommon.StreamEndReasonEOF ||
 			info.StreamStatus.EndReason == relaycommon.StreamEndReasonScannerErr) {
 			if err := sendKrillStreamDisconnect(c, info); err != nil {
 				logger.LogError(c, "failed to encode Krill stream failure: "+err.Error())
