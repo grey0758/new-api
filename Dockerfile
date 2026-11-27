@@ -32,7 +32,7 @@ FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bb
 COPY deploy/security/libpcre2-8-0_10.42-1+deb12u2_amd64.deb /tmp/libpcre2-8-0.deb
 # Advance this date when Debian publishes security fixes so the shared build
 # cache cannot retain an older apt upgrade layer across production releases.
-ARG OPENCODEX_DEBIAN_SECURITY_REFRESH=2026-10-07
+ARG OPENCODEX_DEBIAN_SECURITY_REFRESH=2026-11-27
 RUN test -n "$OPENCODEX_DEBIAN_SECURITY_REFRESH" \
     && apt-get update \
     && apt-get upgrade -y --no-install-recommends \
