@@ -23,6 +23,7 @@ const (
 	responsesStreamGuardMaxBufferedBytes  = 64 << 10
 	krillStreamDisconnectCode             = "upstream_stream_incomplete"
 	krillStreamDisconnectMessage          = "Upstream response ended before a terminal event"
+	krillUnexpectedStreamEndMessage       = "The response stream ended unexpectedly. Please try again."
 )
 
 type responsesStreamBufferedChunk struct {
@@ -242,7 +243,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	}
 
 	if krillStream && !completed && !krillTerminal && c.Writer.Written() {
-		if streamErr.GetErrorCode() == krillStreamDisconnectCode {
+		if isKrillStreamDisconnect(streamErr) {
 			// A parsed upstream failure still requires a refund if the client disconnects.
 			return nil, krillStreamDisconnectError(info)
 		}
@@ -307,6 +308,19 @@ func krillStreamDisconnectError(info *relaycommon.RelayInfo) *types.NewAPIError 
 	return types.NewOpenAIError(fmt.Errorf("%s: end=%s received=%d sent=%d", krillStreamDisconnectMessage,
 		info.StreamStatus.EndReason, info.ReceivedResponseCount, info.SendResponseCount),
 		types.ErrorCodeResponsesStreamIncomplete, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+}
+
+func isKrillStreamDisconnect(err *types.NewAPIError) bool {
+	if err == nil {
+		return false
+	}
+	if err.GetErrorCode() == krillStreamDisconnectCode {
+		return true
+	}
+	upstream, ok := err.RelayError.(types.OpenAIError)
+	return ok && (upstream.Code == nil || upstream.Code == "") &&
+		(upstream.Type == "upstream_error" || upstream.Type == "server_error" || upstream.Type == "error") &&
+		upstream.Message == krillUnexpectedStreamEndMessage
 }
 
 func sendKrillStreamDisconnect(c *gin.Context, info *relaycommon.RelayInfo) error {

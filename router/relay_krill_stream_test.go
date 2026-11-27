@@ -50,6 +50,7 @@ func TestKrillResponsesStreamSettlementAndFailover(t *testing.T) {
 		quota      = 1000000
 		partial    = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"partial output\"}\n\n"
 		failed     = "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"upstream_stream_incomplete\",\"message\":\"Upstream response ended before a terminal event\"}}}\n\n"
+		generic    = "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"message\":\"The response stream ended unexpectedly. Please try again.\"}}}\n\n"
 		completed  = "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":13,\"output_tokens\":5,\"total_tokens\":18}}}\n\n"
 		incomplete = "event: response.incomplete\ndata: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n"
 	)
@@ -66,6 +67,11 @@ func TestKrillResponsesStreamSettlementAndFailover(t *testing.T) {
 	}{
 		{"84 legacy endpoint failure", 84, publicURL, partial + failed, false, true, partial + failed, false, ""},
 		{"84 private endpoint failure", 84, privateURL, partial + failed, false, true, partial + failed, false, ""},
+		{"47 generic termination", 47, directURL, partial + generic, false, true, partial + generic, false, ""},
+		{"84 generic termination and client disconnect", 84, privateURL, partial + generic, false, true, partial + generic, false, "response.failed"},
+		{"85 generic termination", 85, privateURL, partial + generic, false, true, partial + generic, false, ""},
+		{"85 generic termination before output", 85, privateURL, generic, true, false, completed, false, ""},
+		{"85 generic termination with another provider", 85, "https://other.invalid", partial + generic, false, false, partial + generic, false, ""},
 		{"85 private endpoint failure", 85, privateURL, partial + failed, false, true, partial + failed, false, ""},
 		{"47 client closes on failure", 47, directURL, partial + failed, false, true, partial + failed, false, "response.failed"},
 		{"84 client closes on failure", 84, privateURL, partial + failed, false, true, partial + failed, false, "response.failed"},

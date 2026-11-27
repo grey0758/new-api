@@ -83,6 +83,32 @@ func TestResponsesStreamFatalEventErrorIncludesUpstreamMessage(t *testing.T) {
 	}
 }
 
+func TestKrillStreamDisconnectClassification(t *testing.T) {
+	const unexpectedEnd = "The response stream ended unexpectedly. Please try again."
+	require.False(t, isKrillStreamDisconnect(nil))
+	for _, tc := range []struct {
+		name string
+		err  any
+		want bool
+	}{
+		{"existing code", types.OpenAIError{Code: "upstream_stream_incomplete"}, true},
+		{"message only", types.OpenAIError{Message: unexpectedEnd}, true},
+		{"empty code", types.OpenAIError{Type: "server_error", Code: "", Message: unexpectedEnd}, true},
+		{"string error", unexpectedEnd, true},
+		{"explicit busy code", types.OpenAIError{Type: "server_error", Code: "server_busy", Message: unexpectedEnd}, false},
+		{"explicit request type", types.OpenAIError{Type: "invalid_request_error", Message: unexpectedEnd}, false},
+		{"different message", types.OpenAIError{Message: "The server is busy. Please try again."}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := responsesStreamFatalEventNewAPIError(dto.ResponsesStreamResponse{
+				Type:     "response.failed",
+				Response: &dto.OpenAIResponsesResponse{Error: tc.err},
+			})
+			require.Equal(t, tc.want, isKrillStreamDisconnect(err))
+		})
+	}
+}
+
 func TestShouldCommitResponsesStreamGuard(t *testing.T) {
 	tests := []struct {
 		name           string
